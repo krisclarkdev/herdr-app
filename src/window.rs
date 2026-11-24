@@ -2111,15 +2111,8 @@ impl AppWindow {
         let Some((command, name, cwd, machine)) = self.model.space(&id).map(|space| {
             let command = space.startup_command.clone();
             let name = self.model.space_name(space, &home());
-            let cwd = {
-                let folder = space.folder.trim();
-                if folder.is_empty() || folder == "~" {
-                    Some(home())
-                } else {
-                    Some(folder.to_owned())
-                }
-            };
             let machine = space.machine.clone();
+            let cwd = crate::space_startup::resolve_cwd(&space.folder, machine.as_deref(), &home());
             (command, name, cwd, machine)
         }) else {
             return;
@@ -3227,7 +3220,7 @@ impl AppWindow {
             if !args.is_object() { args = json!({}); }
             args["machine"] = json!(machine);
         }
-        if matches!(name, "space.new" | "space.close" | "space.rename" | "space.move" | "tab.new" | "tab.close" | "tab.rename" | "tab.move" | "pane.split" | "pane.close" | "pane.swap" | "pane.rename" | "pane.resize" | "terminal.keep" | "terminal.park") {
+        if matches!(name, "space.new" | "space.close" | "space.rename" | "space.set_startup_command" | "space.move" | "tab.new" | "tab.close" | "tab.rename" | "tab.move" | "pane.split" | "pane.close" | "pane.swap" | "pane.rename" | "pane.resize" | "terminal.keep" | "terminal.park") {
             let node = ["id", "space", "pane"].into_iter().find_map(|k| Self::arg(&args, k));
             let target = node.and_then(|id| self.model.space(id).or_else(|| self.model.space_of(id))).or_else(|| self.model.active_space());
             let machine = if name == "space.new" { Self::arg(&args, "machine") }

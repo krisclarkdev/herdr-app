@@ -71,6 +71,22 @@ impl RunResult {
     }
 }
 
+
+/// Folder for exec cwd. Empty/`~` → local home on this machine; for a remote, omit cwd
+/// so `hc exec` uses that machine's home (never the viewer's home path).
+pub fn resolve_cwd(folder: &str, machine: Option<&str>, local_home: &str) -> Option<String> {
+    let folder = folder.trim();
+    if folder.is_empty() || folder == "~" {
+        if machine.is_some() {
+            None
+        } else {
+            Some(local_home.to_owned())
+        }
+    } else {
+        Some(folder.to_owned())
+    }
+}
+
 pub fn should_run(command: &str) -> bool {
     !command.trim().is_empty()
 }
@@ -171,6 +187,16 @@ fn run_remote(machine: &str, command: &str, cwd: Option<String>) -> Result<(i32,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_empty_or_tilde_cwd_is_machine_home_not_local() {
+        assert_eq!(resolve_cwd("", Some("box"), "/local/home"), None);
+        assert_eq!(resolve_cwd("~", Some("box"), "/local/home"), None);
+        assert_eq!(resolve_cwd("  ~  ", Some("box"), "/local/home"), None);
+        assert_eq!(resolve_cwd("/work", Some("box"), "/local/home").as_deref(), Some("/work"));
+        assert_eq!(resolve_cwd("", None, "/local/home").as_deref(), Some("/local/home"));
+        assert_eq!(resolve_cwd("~", None, "/local/home").as_deref(), Some("/local/home"));
+    }
 
     #[test]
     fn empty_command_is_not_run() {
