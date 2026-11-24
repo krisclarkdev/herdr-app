@@ -398,6 +398,12 @@ pub struct Person {
     /// Anonymous usage data (telemetry.rs). On unless set to false.
     #[serde(skip_serializing_if = "is_true")]
     pub telemetry: bool,
+    /// PowerShell run once when the Herdr window opens (Windows). Empty = off.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub startup_script: String,
+    /// When false, skip the startup script even if `startup_script` is set.
+    #[serde(skip_serializing_if = "is_true")]
+    pub startup_script_enabled: bool,
     /// Allow terminal programs (including remote ones) to copy text locally.
     #[serde(skip_serializing_if = "is_true")]
     pub clipboard_write: bool,
@@ -473,6 +479,8 @@ impl Default for Person {
             terminal_scroll_speed: 1.0,
             ui_font: None,
             telemetry: true,
+            startup_script: String::new(),
+            startup_script_enabled: true,
             clipboard_write: true,
             copy_on_select: true,
             pane_scrollbars: true,
@@ -1103,11 +1111,25 @@ mod tests {
         assert_eq!(Settings::compose(&person, &win98.look, true).theme, "ink");
     }
 
+    #[test]
+    fn startup_script_defaults_empty_and_enabled() {
+        let default: Person = serde_json::from_str("{}").unwrap();
+        assert!(default.startup_script.is_empty());
+        assert!(default.startup_script_enabled);
+        let on = Person { startup_script: "Write-Output 1".into(), ..Person::default() };
+        assert_eq!(serde_json::to_value(&on).unwrap()["startup_script"], "Write-Output 1");
+        assert!(serde_json::to_value(&on).unwrap().get("startup_script_enabled").is_none());
+        let off: Person = serde_json::from_str(r#"{"startup_script":"x","startup_script_enabled":false}"#).unwrap();
+        assert_eq!(off.startup_script, "x");
+        assert!(!off.startup_script_enabled);
+        assert_eq!(serde_json::to_value(&off).unwrap()["startup_script_enabled"], false);
+    }
+
     /// The guide agents read (written to the home folder) explains every
     /// settings.json key.
     #[test]
     fn the_guide_explains_every_setting() {
-        let all = Person { core: Some(String::new()), font: Some(String::new()), font_size: Some(1.0), font_weight: Some(400), font_weight_bold: Some(700), ui_font: Some(String::new()), telemetry: false, clipboard_write: false, copy_on_select: false, appearance: Appearance::Light, theme: Some(crate::layout::ThemeChoice::One(String::new())), colors: [("text".into(), String::new())].into(), ..Person::default() };
+        let all = Person { core: Some(String::new()), font: Some(String::new()), font_size: Some(1.0), font_weight: Some(400), font_weight_bold: Some(700), ui_font: Some(String::new()), telemetry: false, startup_script: "Write-Output ok".into(), startup_script_enabled: false, clipboard_write: false, copy_on_select: false, appearance: Appearance::Light, theme: Some(crate::layout::ThemeChoice::One(String::new())), colors: [("text".into(), String::new())].into(), ..Person::default() };
         let keys: Vec<String> = serde_json::to_value(&all).unwrap().as_object().unwrap().keys().cloned().collect();
         let guide = include_str!("../defaults/AGENTS.md");
         let section = guide.split("## The person").nth(1).and_then(|s| s.split("\n## ").next()).unwrap_or_default();

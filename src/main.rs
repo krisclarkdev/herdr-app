@@ -28,6 +28,7 @@ mod process_cwd;
 mod programs;
 mod remote_shell;
 mod settings;
+mod startup_script;
 mod setup;
 mod sound;
 mod spawn;

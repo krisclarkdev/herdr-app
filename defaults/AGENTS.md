@@ -834,6 +834,13 @@ What's about the user, never a look:
   background; this is a threshold, not a guaranteed resulting ratio.
   Box/block, Powerline and sprite glyph colors are never adjusted.
   Changes apply immediately, including text already on screen.
+- `startup_script`: PowerShell source run once when the Herdr desktop window
+  opens (Windows). Empty or omitted means do nothing. Edits live in Settings →
+  Scripts and write immediately to this file. Failures toast and write
+  `startup-script-last.json` (last exit, stdout/stderr); they never block the
+  window. Non-Windows builds keep the text but do not auto-run it.
+- `startup_script_enabled`: `false` skips the startup script even when
+  `startup_script` is set (default `true` / omit).
 - `clipboard_write`: `false` blocks terminal programs from writing the local
   clipboard (default `true`, including remote terminals attached in this window).
   OSC 52 accepts base64 UTF-8 text up to 1 MiB: `c` writes the system clipboard,

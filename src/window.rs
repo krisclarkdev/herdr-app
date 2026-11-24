@@ -852,6 +852,39 @@ impl AppWindow {
             w.update_success = crate::update_notes::changed();
         }
         crate::telemetry::window_open();
+        // Startup script: once per process, after the window is up — never on the critical path.
+        if crate::startup_script::claim_once()
+            && crate::startup_script::runs_on_this_os()
+            && crate::startup_script::should_schedule(&w.person)
+        {
+            let script = w.person.startup_script.clone();
+            w._tasks.push(cx.spawn_in(window, async move |this, cx| {
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { crate::startup_script::run(&script) })
+                    .await;
+                let _ = this.update_in(cx, |this, window, cx| {
+                    if let Err(e) = crate::startup_script::save_last_run(&result) {
+                        tracing::warn!("cannot write startup-script-last.json: {e}");
+                    }
+                    tracing::info!(
+                        exit = ?result.exit_code,
+                        timed_out = result.timed_out,
+                        failed = result.failed(),
+                        "startup script finished"
+                    );
+                    if result.failed() {
+                        let notification = crate::startup_script::failure_notification(&result);
+                        this.open_overlay(
+                            crate::mods::new_overlay_id(),
+                            serde_json::json!({ "kind": "toast", "notification": notification }),
+                            window,
+                            cx,
+                        );
+                    }
+                });
+            }));
+        }
         w
     }
 

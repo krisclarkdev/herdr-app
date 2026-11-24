@@ -1,7 +1,7 @@
 // App-owned settings mod. Writes changes immediately; no Save step.
 
 import { View, div, svg, image } from "gpui-kit";
-import { v_flex, h_flex, Scrollbar, InputState, Input, Popup } from "gpui-base";
+import { v_flex, h_flex, Scrollbar, InputState, Input, TextareaState, Textarea, Popup } from "gpui-base";
 import { hc, run, theme, themes, fonts, updates, telemetry, settings, layouts, shared, appHome, readTextFile, writeTextFile, playSound, props, closeOverlay, notify, window } from "herdr";
 
 const I = (name) => `frame/settings/${name}.svg`;
@@ -10,6 +10,7 @@ const SECTIONS = [
   { id: "look", title: "Look", icon: "palette" },
   ...(window()?.platform === "macos" ? [{ id: "keyboard", title: "Keyboard", icon: "keyboard" }] : []),
   { id: "machines", title: "Machines", icon: "server" },
+  { id: "scripts", title: "Scripts", icon: "script" },
   { id: "alerts", title: "Alerts", icon: "bell" },
   { id: "updates", title: "Updates", icon: "refresh" },
   { id: "privacy", title: "Privacy", icon: "shield" },
@@ -42,6 +43,16 @@ export default class Settings extends View {
       const edit = this.machineEdit;
       if (edit?.action === "rename") this.machineAction(edit.machine, "rename", cx, edit.name);
     });
+    this.scriptInput = TextareaState.new({
+      value: "",
+      placeholder: "PowerShell that runs when Herdr opens…",
+      rows: 12,
+    });
+    this.scriptInput.on("change", (_e, cx) => this.onScriptEdit(cx));
+    this.scriptFocused = false;
+    this.scriptInput.on("focus", (_e, cx) => { this.scriptFocused = true; cx.notify(); });
+    this.scriptInput.on("blur", (_e, cx) => { this.scriptFocused = false; cx.notify(); });
+    this.lastRun = null;
     this.person = {};
     this.raw = null;
     this.previews = {}; // layout name -> its "preview" picture
@@ -58,7 +69,9 @@ export default class Settings extends View {
     this.handle.focus();
     cx.spawn(async (cx) => {
       await this.load();
+      this.syncScriptEditor();
       if (this.section === "machines") await this.loadMachines();
+      if (this.section === "scripts") await this.loadLastRun();
       cx.notify();
     });
     // After "Check now": follow the look (the answer comes from the app), then
@@ -80,6 +93,35 @@ export default class Settings extends View {
 
   file() {
     return `${appHome()}/settings.json`;
+  }
+
+  lastRunFile() {
+    return `${appHome()}/startup-script-last.json`;
+  }
+
+  syncScriptEditor() {
+    const value = typeof this.person.startup_script === "string" ? this.person.startup_script : "";
+    if (this.scriptInput.value() !== value) this.scriptInput.set_value(value);
+  }
+
+  onScriptEdit(cx) {
+    const value = this.scriptInput.value();
+    const current = typeof this.person.startup_script === "string" ? this.person.startup_script : "";
+    if (value === current) return;
+    this.change((p) => {
+      if (value) p.startup_script = value;
+      else delete p.startup_script;
+    }, cx);
+  }
+
+  async loadLastRun() {
+    try {
+      const raw = await readTextFile(this.lastRunFile());
+      this.lastRun = raw ? JSON.parse(raw) : null;
+      if (this.lastRun && typeof this.lastRun !== "object") this.lastRun = null;
+    } catch {
+      this.lastRun = null;
+    }
   }
 
   // Each layout file may name a picture of itself (`"preview"` on its root).
@@ -841,6 +883,101 @@ export default class Settings extends View {
       );
   }
 
+  scripts(t) {
+    const enabled = this.person.startup_script_enabled !== false;
+    const platform = window()?.platform;
+    const windows = platform === "windows";
+    const last = this.lastRun;
+    const when = last?.finished_at_ms
+      ? new Date(last.finished_at_ms).toLocaleString()
+      : last?.started_at_ms
+        ? new Date(last.started_at_ms).toLocaleString()
+        : null;
+    let status = "No run recorded yet.";
+    if (last) {
+      if (last.timed_out) status = `Timed out${when ? ` · ${when}` : ""}`;
+      else if (last.error) status = `${last.error}${when ? ` · ${when}` : ""}`;
+      else if (last.exit_code === 0) status = `Succeeded${when ? ` · ${when}` : ""}`;
+      else status = `Failed (exit ${last.exit_code ?? "?"})${when ? ` · ${when}` : ""}`;
+    }
+    const log = [];
+    if (last?.stdout) log.push(`stdout:\n${last.stdout}`);
+    if (last?.stderr) log.push(`stderr:\n${last.stderr}`);
+    if (last?.error) log.push(`error:\n${last.error}`);
+    const logText = log.join("\n\n") || "Output will show here after the next run.";
+    return v_flex()
+      .w_full()
+      .gap(4)
+      .child(this.heading(t, "Startup script"))
+      .child(
+        this.row(
+          t,
+          "Run when Herdr opens",
+          windows
+            ? "Once per window start, after the UI is up. Failures toast and never block the window."
+            : "Runs on Windows when Herdr opens. You can still edit the script here to copy to a Windows machine.",
+          this.toggle(t, "st-script-on", enabled, (_e, cx) =>
+            this.change((p) => {
+              if (enabled) p.startup_script_enabled = false;
+              else delete p.startup_script_enabled;
+            }, cx),
+          ),
+        ),
+      )
+      .child(div().pt(10).text_size(12.5).text_color(t.dim).child("PowerShell (pwsh.exe, else powershell.exe). Saved immediately."))
+      .child(
+        div()
+          .mt(6)
+          .w_full()
+          .min_h(220)
+          .p(10)
+          .rounded(8)
+          .border_1()
+          .border_color(this.scriptFocused ? t.accent : t.input)
+          .bg(t.background)
+          .child(
+            Textarea.new(this.scriptInput)
+              .w_full()
+              .min_h(200)
+              .font_family(DEFAULT_FONT)
+              .text_size(12.5)
+              .text_color(t.foreground),
+          ),
+      )
+      .child(this.heading(t, "Last run"))
+      .child(div().text_size(13).text_color(t.foreground).child(status))
+      .child(
+        v_flex()
+          .id("st-script-last")
+          .mt(6)
+          .w_full()
+          .max_h(220)
+          .p(10)
+          .rounded(8)
+          .border_1()
+          .border_color(t.border)
+          .bg(t.background)
+          .overflow_y_scroll()
+          .children(
+            logText.split("\n").map((l) =>
+              div().font_family(DEFAULT_FONT).text_size(12).line_height("17px").text_color(t.muted).whitespace_nowrap().child(l || " "),
+            ),
+          ),
+      )
+      .child(
+        h_flex()
+          .pt(8)
+          .child(
+            this.button(t, "st-script-refresh", "Refresh last run", (_e, cx) => {
+              cx.spawn(async (cx) => {
+                await this.loadLastRun();
+                cx.notify();
+              });
+            }),
+          ),
+      );
+  }
+
   privacy(t) {
     const s = telemetry();
     const on = s ? s.setting : this.person.telemetry !== false;
@@ -914,6 +1051,7 @@ export default class Settings extends View {
               this.machineEdit = null;
               this.handle.focus();
               if (s.id === "machines") cx.spawn(async (cx) => { await this.loadMachines(); cx.notify(); });
+              if (s.id === "scripts") cx.spawn(async (cx) => { await this.loadLastRun(); this.syncScriptEditor(); cx.notify(); });
               cx.notify();
             })
             .child(svg(I(s.icon)).size(15).text_color(on ? t.accent : t.dim))
@@ -979,6 +1117,8 @@ export default class Settings extends View {
                         ? this.keyboard(t)
                       : this.section === "machines"
                         ? this.machines(t)
+                      : this.section === "scripts"
+                        ? this.scripts(t)
                       : this.section === "alerts"
                         ? this.alerts(t)
                         : this.section === "privacy"
