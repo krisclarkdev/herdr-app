@@ -68,7 +68,7 @@ export default class SpaceSettings extends View {
     const detail = [last.stderr, last.stdout, last.error].filter(Boolean).join("\n").trim();
     const preview = detail ? this.wrapPreview(detail) : "";
     return v_flex()
-      .pt(14)
+      .pt(12)
       .gap(4)
       .child(div().text_size(11.5).text_color(t.dim).child("Last run"))
       .child(div().text_size(12.5).text_color(last.exit_code === 0 && !last.timed_out && !last.error ? t.foreground : t.blocked).child(`${status}${when ? ` · ${when}` : ""}`))
@@ -94,7 +94,7 @@ export default class SpaceSettings extends View {
     const p = props() ?? {};
     const title = (p.title ?? "Space").replace(/^./, (c) => c.toUpperCase());
     const last = p.last_run && typeof p.last_run === "object" ? p.last_run : null;
-    const label = (text) => div().pt(16).pb(7).text_size(11.5).text_color(t.dim).child(text);
+    const label = (text) => div().pt(14).pb(6).text_size(11.5).text_color(t.dim).child(text);
     const button = (id, text, primary, action, focus) => {
       const on = focus?.is_focused?.() === true;
       let el = h_flex()
@@ -133,7 +133,8 @@ export default class SpaceSettings extends View {
       .on_key_down((e, cx) => this.key(e, cx))
       .w_full()
       .min_h(0)
-      .p(18)
+      .p(20)
+      .gap(2)
       .bg(t.popover)
       .text_color(t.foreground)
       .child(
@@ -164,7 +165,7 @@ export default class SpaceSettings extends View {
       .when(Boolean(last), (el) => el.child(this.lastRunSummary(t, last)))
       .child(
         h_flex()
-          .pt(20)
+          .pt(16)
           .gap(8)
           .justify_end()
           .child(button("ss-cancel", "Cancel", false, () => closeOverlay(p.overlay), this.focusCancel))

@@ -1062,8 +1062,8 @@ export default class Settings extends View {
       .w_full()
       .gap(4)
       .child(this.heading(t, "UI configurations"))
-      .child(div().text_size(12.5).text_color(t.dim).child("Named snapshots of every machine's spaces plus this screen's selection. Not the same as Look layouts (Herdr / Terminals / Herdr 98)."))
-      .child(div().text_size(12).text_color(t.dim).child('“Active” means the last configuration saved or restored on this device.'))
+      .child(div().pt(2).text_size(12.5).line_height("18px").text_color(t.dim).child("Named snapshots of every machine's spaces plus this screen's selection. Not the same as Look layouts (Herdr / Terminals / Herdr 98)."))
+      .child(div().pt(4).pb(4).text_size(12).line_height("17px").text_color(t.dim).child('“Active” means the last configuration saved or restored on this device.'))
       .child(
         this.row(
           t,
@@ -1105,7 +1105,7 @@ export default class Settings extends View {
                   .id(`st-cfg-${name}`)
                   .w_full()
                   .px(10)
-                  .py(8)
+                  .py(10)
                   .rounded(8)
                   .border_1()
                   .border_color(on ? t.accent : t.border)
@@ -1125,12 +1125,17 @@ export default class Settings extends View {
       )
       .when(Boolean(selected), (el) =>
         el
-          .child(div().pt(14).text_size(12.5).text_color(t.foreground).child(spaceLine))
-          .when(Boolean(savedAt), (row) => row.child(div().pt(4).text_size(12).text_color(t.dim).child(`Saved ${savedAt}`)))
-          .child(div().pt(4).text_size(12.5).text_color(t.dim).child(`Machines: ${machines.map(machineLabel).join(", ") || "none"}`))
+          .child(
+            v_flex()
+              .pt(12)
+              .gap(4)
+              .child(div().text_size(12.5).text_color(t.foreground).child(spaceLine))
+              .when(Boolean(savedAt), (row) => row.child(div().text_size(12).text_color(t.dim).child(`Saved ${savedAt}`)))
+              .child(div().text_size(12.5).text_color(t.dim).child(`Machines: ${machines.map(machineLabel).join(", ") || "none"}`)),
+          )
           .child(
             h_flex()
-              .pt(8)
+              .pt(10)
               .child(
                 this.button(t, "st-cfg-refresh", "Refresh list", (_e, cx) => {
                   cx.spawn(async (cx) => {
@@ -1187,12 +1192,12 @@ export default class Settings extends View {
           this.focusScriptToggle),
         ),
       )
-      .child(div().pt(10).text_size(12.5).text_color(t.dim).child("PowerShell (pwsh.exe, else powershell.exe). Saved immediately."))
+      .child(div().pt(8).text_size(12.5).text_color(t.dim).child("PowerShell (pwsh.exe, else powershell.exe). Saved immediately."))
       .child(
         div()
-          .mt(6)
+          .mt(4)
           .w_full()
-          .min_h(220)
+          .min_h(160)
           .p(10)
           .rounded(8)
           .border_1()
@@ -1201,20 +1206,20 @@ export default class Settings extends View {
           .child(
             Textarea.new(this.scriptInput)
               .w_full()
-              .min_h(200)
+              .min_h(140)
               .font_family(DEFAULT_FONT)
               .text_size(12.5)
               .text_color(t.foreground),
           ),
       )
-      .child(this.heading(t, "Last run"))
+      .child(div().pt(8).child(this.heading(t, "Last run")))
       .child(div().text_size(13).text_color(t.foreground).child(status))
       .child(
         v_flex()
           .id("st-script-last")
-          .mt(6)
+          .mt(4)
           .w_full()
-          .max_h(220)
+          .max_h(160)
           .p(10)
           .rounded(8)
           .border_1()
@@ -1241,7 +1246,7 @@ export default class Settings extends View {
       )
       .child(
         h_flex()
-          .pt(10)
+          .pt(8)
           .gap(8)
           .flex_wrap()
           .child(
@@ -1353,7 +1358,7 @@ export default class Settings extends View {
         cx.notify();
       }))
       .w_full()
-      .h(620)
+      .h(600)
       .min_h(0)
       .items_start()
       .on_key_down((e, cx) => {
