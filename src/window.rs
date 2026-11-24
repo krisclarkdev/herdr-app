@@ -468,6 +468,8 @@ pub struct AppWindow {
     pending_terminals: std::collections::BTreeMap<String, PendingTerminalChange>,
     /// Each machine owns a document; the empty key is this core.
     documents: std::collections::BTreeMap<String, crate::mirror_sync::Slot>,
+    /// Space ids whose startup command already ran this open generation.
+    space_startup: crate::space_startup::Gate,
     initial_view: Option<crate::mirror::View>,
     pointer: Point<Pixels>,
     /// Where a press on a `window_drag` node started, until it moves the window.
@@ -588,6 +590,7 @@ impl AppWindow {
                 local.connection(true, None, None);
                 [(String::new(), local)].into()
             },
+            space_startup: crate::space_startup::Gate::default(),
             initial_view: std::fs::read_to_string(file("view.json")).ok().and_then(|s| serde_json::from_str(&s).ok()),
             pointer: Point::default(),
             drag_from: None,
@@ -2097,6 +2100,57 @@ impl AppWindow {
         }
     }
 
+
+    /// Run the active space's startup command once per open generation (background; toast on failure).
+    fn maybe_run_space_startup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.space_startup.retain_present(|id| self.model.space(id).is_some());
+        let Some(id) = self.model.active.clone() else { return };
+        if self.space_startup.contains(&id) {
+            return;
+        }
+        let Some((command, name, cwd, machine)) = self.model.space(&id).map(|space| {
+            let command = space.startup_command.clone();
+            let name = self.model.space_name(space, &home());
+            let cwd = {
+                let folder = space.folder.trim();
+                if folder.is_empty() || folder == "~" {
+                    Some(home())
+                } else {
+                    Some(folder.to_owned())
+                }
+            };
+            let machine = space.machine.clone();
+            (command, name, cwd, machine)
+        }) else {
+            return;
+        };
+        if !crate::space_startup::should_run(&command) {
+            return;
+        }
+        if !self.space_startup.claim(&id) {
+            return;
+        }
+        let space_id = id;
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx.background_executor().spawn(async move {
+                crate::space_startup::run(&command, cwd, machine.as_deref())
+            }).await;
+            if !result.failed() {
+                return;
+            }
+            let _ = this.update_in(cx, |this, window, cx| {
+                let notification = crate::space_startup::failure_notification(&name, &space_id, &result);
+                this.open_overlay(
+                    mods::new_overlay_id(),
+                    json!({ "kind": "toast", "notification": notification }),
+                    window,
+                    cx,
+                );
+            });
+        })
+        .detach();
+    }
+
     fn flush_documents(&mut self, refresh: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.draining || !self.documents_watching { return; }
         let generation = self.core_generation;
@@ -2255,6 +2309,10 @@ impl AppWindow {
             let before = self.model.spaces.len();
             self.model.spaces.retain(|s| s.machine.as_deref().is_none_or(|m| states.contains_key(m)));
             changed |= before != self.model.spaces.len();
+        }
+        if changed {
+            self.space_startup.retain_present(|id| self.model.space(id).is_some());
+            self.maybe_run_space_startup(window, cx);
         }
         if !listing || changed || shown(&self.documents) != was {
             self.publish(cx);
@@ -3246,6 +3304,7 @@ impl AppWindow {
                     return;
                 }
                 let addrs = self.model.remove_space(&id);
+                self.space_startup.on_close(&id);
                 self.kill(addrs, cx);
             }
             "space.rename" => {
@@ -3258,13 +3317,49 @@ impl AppWindow {
                 let (Some(id), Some(i)) = (Self::arg(a, "id"), a.get("index").and_then(Value::as_u64)) else { return self.fail("space.move needs id and index") };
                 if !self.model.move_space(id, i as usize) { return self.fail(format!("no space {id:?}")); }
             }
+            "space.settings" => {
+                let Some(id) = Self::owned(a, "id").or_else(|| self.model.active.clone()) else { return self.fail("no space for settings") };
+                let Some(p) = self.model.space(&id) else { return self.fail(format!("no space {id:?}")) };
+                let title = self.model.space_name(p, &home());
+                let value = p.startup_command.clone();
+                let overlay = "space-settings".to_owned();
+                if self.overlays.iter().any(|o| o.id == overlay) {
+                    self.close_overlay(&overlay, window, cx);
+                    return;
+                }
+                let spec = json!({
+                    "mod": "space-settings",
+                    "kind": "dialog",
+                    "width": 480,
+                    "props": {
+                        "title": title,
+                        "value": value,
+                        "id": id,
+                        "command": { "name": "space.set_startup_command", "args": { "id": id } },
+                    }
+                });
+                self.open_overlay(overlay, spec, window, cx);
+            }
+            "space.set_startup_command" => {
+                let Some(id) = Self::owned(a, "id").or_else(|| self.model.active.clone()) else { return self.fail("no space") };
+                // Accept `command` (preferred), or prompt-style `name` / `value`.
+                let Some(command) = a.get("command").and_then(Value::as_str).map(str::to_owned)
+                    .or_else(|| a.get("value").and_then(Value::as_str).map(str::to_owned))
+                    .or_else(|| Self::arg(a, "name").map(|s| s.to_owned()))
+                else { return self.fail("space.set_startup_command needs command") };
+                let Some(p) = self.model.space_mut(&id) else { return self.fail(format!("no space {id:?}")) };
+                p.startup_command = command;
+            }
             "space.select" => {
                 let id = Self::owned(a, "id").or_else(|| {
                     let i = a.get("index").and_then(Value::as_u64)? as usize;
                     self.model.spaces.get(i.checked_sub(1)?).map(|p| p.id.clone())
                 });
                 match id.filter(|id| self.model.space(id).is_some()) {
-                    Some(id) => self.model.active = Some(id),
+                    Some(id) => {
+                        self.model.active = Some(id);
+                        self.maybe_run_space_startup(window, cx);
+                    }
                     None => return self.fail("no such space"),
                 }
             }
@@ -3273,6 +3368,7 @@ impl AppWindow {
                 if let Some(i) = self.model.active_index().filter(|_| n > 0) {
                     let j = if name == "space.next" { (i + 1) % n } else { (i + n - 1) % n };
                     self.model.active = Some(self.model.spaces[j].id.clone());
+                    self.maybe_run_space_startup(window, cx);
                 }
             }
             // ---- tabs
@@ -4180,6 +4276,8 @@ impl AppWindow {
         if let Ok(view) = serde_json::from_value::<crate::mirror::View>(item.view.clone()) {
             view.apply(&mut self.model);
         }
+        self.space_startup.retain_present(|id| self.model.space(id).is_some());
+        self.maybe_run_space_startup(window, cx);
         self.save_view();
         self.sync(window, cx);
 
@@ -4543,7 +4641,7 @@ impl AppWindow {
                         json!({ "id": c.id, "name": Model::tab_name(p, c), "active": Some(&c.id) == active.as_ref(), "settled": c.settled.is_some(), "terminals": terms })
                     })
                     .collect();
-                json!({ "id": p.id, "name": m.space_name(p, &home()), "folder": p.folder, "machine": p.machine, "active": m.active.as_deref() == Some(&p.id), "tabs": tabs })
+                json!({ "id": p.id, "name": m.space_name(p, &home()), "folder": p.folder, "machine": p.machine, "startup_command": p.startup_command, "active": m.active.as_deref() == Some(&p.id), "tabs": tabs })
             })
             .collect();
         json!({ "spaces": spaces, "recent": m.recent })

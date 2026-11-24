@@ -40,6 +40,8 @@ pub struct Space {
     pub tabs: Vec<Tab>,
     /// The selected tab.
     pub active: Option<String>,
+    /// Shell command run once when this space opens (empty: none).
+    pub startup_command: String,
     /// Fields of its document entry this build doesn't read (a newer build's),
     /// written back as they were.
     pub rest: serde_json::Map<String, serde_json::Value>,
@@ -299,7 +301,7 @@ impl Model {
     fn insert_space(&mut self, id: &str, name: &str, folder: &str, ctx: Tab, show: bool) {
         let show = show || self.active_index().is_none();
         let active = Some(ctx.id.clone());
-        self.spaces.push(Space { id: id.to_owned(), name: name.to_owned(), folder: folder.to_owned(), machine: None, tabs: vec![ctx], active, rest: Default::default() });
+        self.spaces.push(Space { id: id.to_owned(), name: name.to_owned(), folder: folder.to_owned(), machine: None, tabs: vec![ctx], active, startup_command: String::new(), rest: Default::default() });
         self.recent.retain(|r| r.name != name);
         if show {
             self.active = Some(id.to_owned());

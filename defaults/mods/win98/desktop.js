@@ -87,6 +87,7 @@ export default class Desktop {
             { label: "New &Tab...", act: { dialog: { kind: "prompt", title: "New Tab", text: `Type a name for the new tab in '${s.name}':`, icon: "dos", command: { name: "tab.new", args: { space: s.id } } } } },
             { sep: true },
             { label: "Re&name", act: { dialog: { kind: "prompt", title: "Rename", text: "Type a new name for this space:", icon: "folder", value: s.name, command: { name: "space.rename", args: { id: s.id } } } } },
+            { label: "&Settings…", act: { run: ["space.settings", { id: s.id }] } },
             { label: "&Delete", act: { dialog: { kind: "confirm", ...closeSpaceAsk(s) } } },
             { sep: true },
             {

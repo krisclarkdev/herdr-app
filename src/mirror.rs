@@ -19,6 +19,9 @@ pub struct SharedSpace {
     name: String,
     folder: String,
     tabs: Vec<SharedTab>,
+    /// Shell command run once when the space opens.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    startup_command: String,
     /// Fields this build doesn't read, kept so a newer build's survive this one's write.
     #[serde(flatten)]
     rest: serde_json::Map<String, serde_json::Value>,
@@ -113,6 +116,7 @@ impl Document {
                             SharedTab { id: map(&t.id), name: t.name.clone(), root, rest: t.rest.clone() }
                         })
                         .collect(),
+                    startup_command: s.startup_command.clone(),
                     rest: s.rest.clone(),
                 })
                 .collect(),
@@ -139,6 +143,7 @@ impl Document {
                     Tab { id: map(&t.id), name: t.name.clone(), root, focused: None, before: vec![], zoomed: None, settled: None, rest: t.rest.clone() }
                 })
                 .collect(),
+            startup_command: s.startup_command.clone(),
             rest: s.rest.clone(),
         });
         model.spaces.splice(at..at, spaces);
@@ -355,5 +360,21 @@ mod tests {
     #[test]
     fn fresh_ids_are_not_a_per_screen_counter() {
         assert_ne!(Model::default().fresh_id("p"), Model::default().fresh_id("p"));
+    }
+
+    #[test]
+    fn startup_command_round_trips_in_the_document() {
+        let mut m = model();
+        m.space_mut("s").unwrap().startup_command = "echo hi".into();
+        let doc = Document::capture(&m, None);
+        let mut other = Model::default();
+        doc.replace(&mut other, None);
+        assert_eq!(other.space("s").unwrap().startup_command, "echo hi");
+        let empty: Document = serde_json::from_value(serde_json::json!({"spaces":[{"id":"s","tabs":[{"id":"t"}]}]})).unwrap();
+        assert!(empty.spaces[0].startup_command.is_empty());
+        let written = serde_json::to_value(&doc).unwrap();
+        assert_eq!(written["spaces"][0]["startup_command"], "echo hi");
+        let omitted = Document::capture(&model(), None);
+        assert!(serde_json::to_value(&omitted).unwrap()["spaces"][0].get("startup_command").is_none());
     }
 }

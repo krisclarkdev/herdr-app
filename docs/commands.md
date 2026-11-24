@@ -49,6 +49,25 @@ Rename a space (asks the person when no name; an empty name: called after where 
 | `id` | no |
 | `name` | no |
 
+## `space.settings`
+
+Open settings for a space (startup command dialog).
+
+| Argument | Required |
+|---|---|
+| `id` | no |
+
+## `space.set_startup_command`
+
+Set the shell command run once when a space opens (empty: none). Persists on the space's machine document.
+
+| Argument | Required |
+|---|---|
+| `id` | no |
+| `command` | no |
+| `name` | no |
+| `value` | no |
+
 ## `space.move`
 
 Move a space to a position (1 = first).
