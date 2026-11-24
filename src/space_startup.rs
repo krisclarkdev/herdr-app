@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     path::PathBuf,
+    sync::atomic::{AtomicBool, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -12,6 +13,22 @@ const TIMEOUT: Duration = Duration::from_secs(120);
 const OUTPUT_CAP: usize = 4 * 1024;
 const LAST_RUN_FILE: &str = "space-startup-last.json";
 const BODY_OUTPUT_CAP: usize = 400;
+
+/// Any in-flight space startup (auto or manual). Prevents racing last-run writes.
+static RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// Begin a space startup run. False if another run is already in flight.
+pub fn try_begin_run() -> bool {
+    RUNNING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+}
+
+pub fn end_run() {
+    RUNNING.store(false, Ordering::SeqCst);
+}
+
+pub fn is_running() -> bool {
+    RUNNING.load(Ordering::SeqCst)
+}
 
 /// Session-only: space ids whose non-empty startup command already ran this open generation.
 #[derive(Clone, Debug, Default)]
@@ -326,6 +343,18 @@ mod tests {
         g.on_close("a");
         assert!(!g.contains("a"));
         assert!(g.claim("a"));
+    }
+
+    #[test]
+    fn run_busy_gate_blocks_overlap() {
+        end_run();
+        assert!(try_begin_run());
+        assert!(is_running());
+        assert!(!try_begin_run());
+        end_run();
+        assert!(!is_running());
+        assert!(try_begin_run());
+        end_run();
     }
 
     #[test]

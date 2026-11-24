@@ -79,13 +79,18 @@ export default class Settings extends View {
     this.focusCfgSave = cx.focus_handle();
     this.focusCfgRestore = cx.focus_handle();
     this.focusCfgDelete = cx.focus_handle();
+    this.cfgRowFocus = {};
+    this.focusStamp = "";
     this.handle.focus();
     cx.spawn(async (cx) => {
       await this.load();
       this.syncScriptEditor();
       if (this.section === "machines") await this.loadMachines();
       if (this.section === "scripts") await this.loadLastRun();
-      if (this.section === "configurations") await this.loadUiConfigs();
+      if (this.section === "configurations") {
+        await this.loadUiConfigs();
+        this.ensureCfgRowFocus(cx, (this.uiConfigs?.items ?? []).map((i) => i.name));
+      }
       cx.notify();
     });
     // After "Check now": follow the look (the answer comes from the app), then
@@ -96,9 +101,21 @@ export default class Settings extends View {
       else if (Date.now() - this.asked >= 3000) this.asked = null;
       cx.notify();
     });
-    // Refresh focus rings for tab-reachable actions on Scripts / Configurations.
-    cx.timer.every(200, (cx) => {
+    // Focus rings: notify only when a tab-stop's focused state changes (not every 200ms).
+    cx.timer.every(500, (cx) => {
       if (this.section !== "scripts" && this.section !== "configurations") return;
+      const stamp = [
+        this.focusScriptToggle?.is_focused?.(),
+        this.focusScriptRun?.is_focused?.(),
+        this.focusScriptRefresh?.is_focused?.(),
+        this.focusCfgSave?.is_focused?.(),
+        this.focusCfgRestore?.is_focused?.(),
+        this.focusCfgDelete?.is_focused?.(),
+        ...Object.values(this.cfgRowFocus || {}).map((h) => h?.is_focused?.()),
+        this.uiConfigPick,
+      ].join("|");
+      if (stamp === this.focusStamp) return;
+      this.focusStamp = stamp;
       cx.notify();
     });
     cx.timer.every(3000, (cx) => {
@@ -108,9 +125,8 @@ export default class Settings extends View {
         cx.notify();
       });
     });
-    // Configurations: reload only after the on-disk store changes (successful save/delete),
-    // never on the click that merely opens a prompt/confirm.
-    cx.timer.every(1000, (cx) => {
+    // Configurations: stamp reload after successful save/delete (fallback poll, not 1s churn).
+    cx.timer.every(4000, (cx) => {
       if (this.section !== "configurations") return;
       cx.spawn(async (cx) => {
         await this.loadUiConfigsIfChanged();
@@ -247,6 +263,24 @@ export default class Settings extends View {
       this.uiConfigsStamp = null;
       this.uiConfigPick = null;
     }
+  }
+
+  ensureCfgRowFocus(cx, names) {
+    if (!this.cfgRowFocus) this.cfgRowFocus = {};
+    for (const name of names) {
+      if (!this.cfgRowFocus[name]) this.cfgRowFocus[name] = cx.focus_handle();
+    }
+  }
+
+  moveCfgPick(delta, cx) {
+    const names = (this.uiConfigs?.items ?? []).map((i) => i.name);
+    if (!names.length) return;
+    const cur = this.uiConfigPick && names.includes(this.uiConfigPick) ? this.uiConfigPick : names[0];
+    const i = Math.max(0, names.indexOf(cur));
+    const next = names[(i + delta + names.length) % names.length];
+    this.uiConfigPick = next;
+    this.cfgRowFocus[next]?.focus?.();
+    cx.notify();
   }
 
   spaceNamesInConfig(item) {
@@ -1061,9 +1095,10 @@ export default class Settings extends View {
       );
   }
 
-  configurations(t) {
+  configurations(t, cx) {
     const items = this.uiConfigs?.items ?? [];
     const names = items.map((i) => i.name);
+    if (cx) this.ensureCfgRowFocus(cx, names);
     const pick = this.uiConfigPick && names.includes(this.uiConfigPick) ? this.uiConfigPick : (names[0] ?? null);
     const selected = items.find((i) => i.name === pick);
     const machines = selected ? Object.keys(selected.machines ?? {}) : [];
@@ -1120,24 +1155,46 @@ export default class Settings extends View {
             .children(
               names.map((name) => {
                 const on = name === pick;
-                return h_flex()
+                const focus = this.cfgRowFocus[name];
+                const focused = focus?.is_focused?.() === true;
+                let row = h_flex()
                   .id(`st-cfg-${name}`)
                   .w_full()
                   .px(10)
                   .py(10)
                   .rounded(8)
                   .border_1()
-                  .border_color(on ? t.accent : t.border)
+                  .border_color(focused || on ? t.accent : t.border)
                   .bg(on ? t.raised : t.background)
                   .cursor_pointer()
                   .on_click((_e, cx) => {
                     this.uiConfigPick = name;
+                    focus?.focus?.();
                     cx.notify();
                   })
                   .child(div().flex_1().text_size(13.5).text_color(t.foreground).child(name))
-                  .when(this.uiConfigs.active === name, (row) =>
-                    row.child(div().text_size(11).text_color(t.dim).child("active")),
+                  .when(this.uiConfigs.active === name, (el) =>
+                    el.child(div().text_size(11).text_color(t.dim).child("active")),
                   );
+                if (focus) {
+                  row = row
+                    .track_focus(focus)
+                    .tab_stop(true)
+                    .on_key_down((e, cx) => {
+                      if (e.key === "enter" || e.key === " ") {
+                        this.uiConfigPick = name;
+                        cx.notify();
+                        cx.stop_propagation();
+                      } else if (e.key === "down") {
+                        this.moveCfgPick(1, cx);
+                        cx.stop_propagation();
+                      } else if (e.key === "up") {
+                        this.moveCfgPick(-1, cx);
+                        cx.stop_propagation();
+                      }
+                    });
+                }
+                return row;
               }),
             ),
         ),
@@ -1199,10 +1256,10 @@ export default class Settings extends View {
       .child(
         this.row(
           t,
-          "Run when Herdr opens",
+          windows ? "Run when Herdr opens" : "Enabled for Windows machines",
           windows
             ? "Once per window start, after the UI is up. Failures toast and never block the window."
-            : "Runs on Windows when Herdr opens. You can still edit the script here to copy to a Windows machine.",
+            : "Only runs on Windows when Herdr opens. You can still edit the script here to copy to a Windows machine.",
           this.toggle(t, "st-script-on", enabled, (_e, cx) =>
             this.change((p) => {
               if (enabled) p.startup_script_enabled = false;
@@ -1211,7 +1268,7 @@ export default class Settings extends View {
           this.focusScriptToggle),
         ),
       )
-      .child(div().pt(8).text_size(12.5).text_color(t.dim).child("PowerShell (pwsh.exe, else powershell.exe). Saved immediately."))
+      .child(div().pt(8).text_size(12.5).text_color(t.dim).child("PowerShell (pwsh.exe, else powershell.exe). Runs in your home folder; times out after 120s. Saved immediately."))
       .child(
         div()
           .mt(4)
@@ -1359,7 +1416,11 @@ export default class Settings extends View {
               this.handle.focus();
               if (s.id === "machines") cx.spawn(async (cx) => { await this.loadMachines(); cx.notify(); });
               if (s.id === "scripts") cx.spawn(async (cx) => { await this.loadLastRun(); this.syncScriptEditor(); cx.notify(); });
-              if (s.id === "configurations") cx.spawn(async (cx) => { await this.loadUiConfigs(); cx.notify(); });
+              if (s.id === "configurations") cx.spawn(async (cx) => {
+                await this.loadUiConfigs();
+                this.ensureCfgRowFocus(cx, (this.uiConfigs?.items ?? []).map((i) => i.name));
+                cx.notify();
+              });
               cx.notify();
             })
             .child(svg(I(s.icon)).size(15).text_color(on ? t.accent : t.dim))
@@ -1388,6 +1449,11 @@ export default class Settings extends View {
           this.handle.focus();
           cx.stop_propagation();
           cx.notify();
+          return;
+        }
+        if (this.section === "configurations" && (k === "down" || k === "up")) {
+          this.moveCfgPick(k === "down" ? 1 : -1, cx);
+          cx.stop_propagation();
           return;
         }
         if (k === "escape") {
@@ -1428,7 +1494,7 @@ export default class Settings extends View {
                       : this.section === "scripts"
                         ? this.scripts(t)
                       : this.section === "configurations"
-                        ? this.configurations(t)
+                        ? this.configurations(t, cx)
                       : this.section === "alerts"
                         ? this.alerts(t)
                         : this.section === "privacy"

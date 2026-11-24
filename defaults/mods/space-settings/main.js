@@ -28,10 +28,25 @@ export default class SpaceSettings extends View {
     this.focusCancel = cx.focus_handle();
     this.focusSave = cx.focus_handle();
     this.focusRun = cx.focus_handle();
+    this.focusRefresh = cx.focus_handle();
     this.runBusy = false;
     this.runNote = null;
+    this.focusStamp = "";
     this.last = props()?.last_run && typeof props().last_run === "object" ? props().last_run : null;
-    cx.timer.every(200, (cx) => cx.notify());
+    // Focus rings only when focus/busy state changes (not a 200ms paint churn).
+    cx.timer.every(500, (cx) => {
+      const stamp = [
+        this.focusCancel?.is_focused?.(),
+        this.focusSave?.is_focused?.(),
+        this.focusRun?.is_focused?.(),
+        this.focusRefresh?.is_focused?.(),
+        this.runBusy,
+        this.inputFocused,
+      ].join("|");
+      if (stamp === this.focusStamp) return;
+      this.focusStamp = stamp;
+      cx.notify();
+    });
   }
 
   lastRunFile() {
@@ -100,7 +115,7 @@ export default class SpaceSettings extends View {
         await cx.sleep(400);
       }
       this.runBusy = false;
-      if (!done) this.runNote = "Still running — reopen settings to refresh";
+      if (!done) this.runNote = "Still running — use Refresh last run";
       else this.runNote = null;
       cx.notify();
     });
@@ -244,6 +259,13 @@ export default class SpaceSettings extends View {
           .justify_end()
           .flex_wrap()
           .child(button("ss-run", this.runBusy ? "Running…" : "Run now", false, (_e, cx) => this.runNow(cx), this.focusRun))
+          .child(button("ss-refresh", "Refresh last run", false, (_e, cx) => {
+            cx.spawn(async (cx) => {
+              await this.loadLastRun();
+              this.runNote = null;
+              cx.notify();
+            });
+          }, this.focusRefresh))
           .child(button("ss-cancel", "Cancel", false, () => closeOverlay(p.overlay), this.focusCancel))
           .child(button("ss-save", "Save", true, () => this.submit(), this.focusSave)),
       );

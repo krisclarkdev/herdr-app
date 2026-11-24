@@ -2126,10 +2126,14 @@ impl AppWindow {
         if !self.space_startup.claim(&id) {
             return;
         }
-        self.spawn_space_startup(id, command, name, cwd, machine, window, cx);
+        if !self.spawn_space_startup(id.clone(), command, name, cwd, machine, window, cx) {
+            // Another run is in flight; allow a later select/open to try again.
+            self.space_startup.on_close(&id);
+        }
     }
 
     /// Background space startup (auto or manual). Does not touch the once-per-open gate.
+    /// Returns false if another space startup is already in flight.
     fn spawn_space_startup(
         &mut self,
         space_id: String,
@@ -2139,7 +2143,10 @@ impl AppWindow {
         machine: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
+        if !crate::space_startup::try_begin_run() {
+            return false;
+        }
         let started_at_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
@@ -2164,6 +2171,7 @@ impl AppWindow {
                 let command = command.clone();
                 async move { crate::space_startup::run(&command, cwd, machine.as_deref()) }
             }).await;
+            crate::space_startup::end_run();
             let last = crate::space_startup::LastRun::from_result(&space_id, &name, &command, started_at_ms, &result);
             if let Err(e) = crate::space_startup::save_last_run(&last) {
                 tracing::warn!("cannot write space-startup-last.json: {e}");
@@ -2182,6 +2190,7 @@ impl AppWindow {
             });
         })
         .detach();
+        true
     }
 
     fn flush_documents(&mut self, refresh: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -3406,7 +3415,9 @@ impl AppWindow {
                 let name = self.model.space_name(space, &home());
                 let machine = space.machine.clone();
                 let cwd = crate::space_startup::resolve_cwd(&space.folder, machine.as_deref(), &home());
-                self.spawn_space_startup(id, command, name, cwd, machine, window, cx);
+                if !self.spawn_space_startup(id, command, name, cwd, machine, window, cx) {
+                    return self.fail("Space startup command already running");
+                }
                 self.answer(Ok(json!({ "ok": true, "running": true })));
             }
             "space.select" => {
