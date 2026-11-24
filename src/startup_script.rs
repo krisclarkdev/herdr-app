@@ -173,7 +173,7 @@ fn run_powershell(script: &str, timeout: Duration) -> Result<LastRun, String> {
     let shell = crate::window::shell();
     let cwd = crate::mods::home();
     let mut child = spawn::detached_command(&shell)
-        .args(["-NoLogo", "-NonInteractive", "-File"])
+        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(&path)
         .current_dir(&cwd)
         .stdin(Stdio::null())

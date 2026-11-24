@@ -3770,6 +3770,115 @@ impl AppWindow {
                 self.open_overlay(mods::new_overlay_id(), spec, window, cx);
                 return;
             }
+            // ---- UI configurations (device-local snapshots; not chrome layouts)
+            "ui_config.list" => {
+                let store = crate::ui_config::Store::load();
+                self.answer(Ok(serde_json::json!({
+                    "active": store.active,
+                    "items": store.items.iter().map(|i| serde_json::json!({
+                        "id": i.id, "name": i.name, "saved_at_ms": i.saved_at_ms,
+                        "machines": i.machines.keys().cloned().collect::<Vec<_>>(),
+                    })).collect::<Vec<_>>(),
+                })));
+            }
+            "ui_config.save" => {
+                let Some(name) = Self::arg(a, "name").map(str::trim).filter(|s| !s.is_empty()) else {
+                    if person {
+                        let spec = serde_json::json!({
+                            "mod": "prompt", "kind": "dialog", "width": 380,
+                            "props": {
+                                "title": "Save UI configuration",
+                                "value": "",
+                                "hint": "Name for this snapshot of every machine's spaces",
+                                "command": { "name": "ui_config.save", "args": {} }
+                            }
+                        });
+                        self.open_overlay(crate::mods::new_overlay_id(), spec, window, cx);
+                        return;
+                    }
+                    return self.fail("ui_config.save needs name");
+                };
+                let name = name.to_owned();
+                let overwrite = a.get("overwrite").and_then(serde_json::Value::as_bool) == Some(true);
+                let store = crate::ui_config::Store::load();
+                if store.find(&name).is_some() && !overwrite {
+                    if !person {
+                        return self.fail(format!("configuration {name:?} exists: pass overwrite: true"));
+                    }
+                    self.confirm(
+                        "Replace configuration?",
+                        &format!("Overwrite saved configuration “{name}” with the current spaces and view?"),
+                        "ui_config.save",
+                        serde_json::json!({ "name": name, "overwrite": true }),
+                        window,
+                        cx,
+                    );
+                    return;
+                }
+                match self.save_ui_config(&name) {
+                    Ok(msg) => {
+                        self.layout_notice("UI configuration saved", &msg, window, cx);
+                        self.answer(Ok(serde_json::json!({ "ok": true, "name": name })));
+                    }
+                    Err(e) => return self.fail(e),
+                }
+            }
+            "ui_config.restore" => {
+                let key = Self::owned(a, "name").or_else(|| Self::owned(a, "id"));
+                let Some(key) = key.filter(|s| !s.trim().is_empty()) else {
+                    return self.fail("ui_config.restore needs name or id");
+                };
+                if a.get("confirmed").and_then(serde_json::Value::as_bool) != Some(true) {
+                    if !person {
+                        return self.fail("ui_config.restore replaces spaces: pass confirmed: true");
+                    }
+                    let label = crate::ui_config::Store::load().find(&key).map(|i| i.name.clone()).unwrap_or_else(|| key.clone());
+                    self.confirm(
+                        "Restore UI configuration?",
+                        &format!("Replace all spaces on connected machines with configuration “{label}”? Running terminals stay; topology will change. Spaces not in the configuration will be closed on connected machines."),
+                        "ui_config.restore",
+                        serde_json::json!({ "name": key, "confirmed": true }),
+                        window,
+                        cx,
+                    );
+                    return;
+                }
+                match self.restore_ui_config(&key, window, cx) {
+                    Ok(msg) => {
+                        self.layout_notice("UI configuration restored", &msg, window, cx);
+                        self.answer(Ok(serde_json::json!({ "ok": true })));
+                    }
+                    Err(e) => return self.fail(e),
+                }
+            }
+            "ui_config.delete" => {
+                let key = Self::owned(a, "name").or_else(|| Self::owned(a, "id"));
+                let Some(key) = key.filter(|s| !s.trim().is_empty()) else {
+                    return self.fail("ui_config.delete needs name or id");
+                };
+                if a.get("confirmed").and_then(serde_json::Value::as_bool) != Some(true) {
+                    if !person {
+                        return self.fail("ui_config.delete needs confirmed: true");
+                    }
+                    let label = crate::ui_config::Store::load().find(&key).map(|i| i.name.clone()).unwrap_or_else(|| key.clone());
+                    self.confirm(
+                        "Delete UI configuration?",
+                        &format!("Delete saved configuration “{label}”? This cannot be undone."),
+                        "ui_config.delete",
+                        serde_json::json!({ "name": key, "confirmed": true }),
+                        window,
+                        cx,
+                    );
+                    return;
+                }
+                match self.delete_ui_config(&key) {
+                    Ok(name) => {
+                        self.layout_notice("UI configuration deleted", &format!("Removed “{name}”."), window, cx);
+                        self.answer(Ok(serde_json::json!({ "ok": true, "name": name })));
+                    }
+                    Err(e) => return self.fail(e),
+                }
+            }
             "app.settings" => {
                 // Once: a second press doesn't stack another; asking for a section opens it there.
                 let section = Self::owned(a, "section");
@@ -3986,6 +4095,122 @@ impl AppWindow {
     }
 
     // ---- overlays ----------------------------------------------------------
+
+    fn save_ui_config(&mut self, name: &str) -> Result<String, String> {
+        let mut machines = std::collections::BTreeMap::new();
+        let mut skipped = Vec::new();
+        for (machine, slot) in &self.documents {
+            let on = (!machine.is_empty()).then_some(machine.as_str());
+            let value = if slot.available {
+                crate::ui_config::document_value(&crate::mirror::Document::capture(&self.model, on))?
+            } else if let Some(stored) = &slot.document {
+                crate::ui_config::document_value(stored)?
+            } else {
+                skipped.push(if machine.is_empty() { "this machine".into() } else { machine.clone() });
+                continue;
+            };
+            machines.insert(machine.clone(), value);
+        }
+        if machines.is_empty() {
+            return Err("No machine documents to save yet".into());
+        }
+        let view = serde_json::to_value(crate::mirror::View::capture(&self.model)).map_err(|e| e.to_string())?;
+        let mut store = crate::ui_config::Store::load();
+        if let Some(existing) = store.find_mut(name) {
+            existing.view = view;
+            existing.machines = machines;
+            existing.saved_at_ms = crate::ui_config::now_ms();
+        } else {
+            store.items.push(crate::ui_config::Item {
+                id: crate::ui_config::fresh_id(),
+                name: name.to_owned(),
+                saved_at_ms: crate::ui_config::now_ms(),
+                view,
+                machines,
+                rest: Default::default(),
+            });
+        }
+        store.active = Some(name.to_owned());
+        store.save().map_err(|e| format!("Cannot write ui-configs.json: {e}"))?;
+        let n = store.find(name).map(|i| i.machines.len()).unwrap_or(0);
+        let mut msg = format!("Saved “{name}” ({n} machines).");
+        if !skipped.is_empty() {
+            msg.push_str(&format!(" Skipped unreachable: {}.", skipped.join(", ")));
+        }
+        Ok(msg)
+    }
+
+    fn restore_ui_config(&mut self, name_or_id: &str, window: &mut Window, cx: &mut Context<Self>) -> Result<String, String> {
+        let store = crate::ui_config::Store::load();
+        let item = store.find(name_or_id).ok_or_else(|| format!("no UI configuration {name_or_id:?}"))?.clone();
+        let mut warnings = Vec::new();
+        let snapshot_keys: std::collections::BTreeSet<_> = item.machines.keys().cloned().collect();
+        let live_keys: Vec<String> = self.documents.keys().cloned().collect();
+
+        for (machine, value) in &item.machines {
+            let Some(slot) = self.documents.get(machine) else {
+                warnings.push(format!("unknown machine {machine:?}"));
+                continue;
+            };
+            if !(slot.connected && slot.available) {
+                let label = if machine.is_empty() { "this machine".into() } else { machine.clone() };
+                warnings.push(format!("{label} unavailable"));
+                continue;
+            }
+            let doc = crate::ui_config::document_from_value(value)?;
+            let on = (!machine.is_empty()).then_some(machine.as_str());
+            doc.replace(&mut self.model, on);
+            if let Some(slot) = self.documents.get_mut(machine) {
+                slot.document = Some(doc);
+                slot.dirty = true;
+            }
+        }
+
+        for machine in live_keys {
+            if snapshot_keys.contains(&machine) {
+                continue;
+            }
+            let Some(slot) = self.documents.get(&machine) else { continue };
+            if !(slot.connected && slot.available) {
+                continue;
+            }
+            let on = (!machine.is_empty()).then_some(machine.as_str());
+            crate::mirror::Document::default().replace(&mut self.model, on);
+            if let Some(slot) = self.documents.get_mut(&machine) {
+                slot.document = Some(crate::mirror::Document::default());
+                slot.dirty = true;
+            }
+        }
+
+        if let Ok(view) = serde_json::from_value::<crate::mirror::View>(item.view.clone()) {
+            view.apply(&mut self.model);
+        }
+        self.save_view();
+        self.sync(window, cx);
+
+        let mut store = store;
+        store.active = Some(item.name.clone());
+        let _ = store.save();
+
+        let mut msg = format!("Restored “{}”.", item.name);
+        if !warnings.is_empty() {
+            msg.push_str(&format!(" Warnings: {}.", warnings.join("; ")));
+        }
+        Ok(msg)
+    }
+
+    fn delete_ui_config(&mut self, name_or_id: &str) -> Result<String, String> {
+        let mut store = crate::ui_config::Store::load();
+        let Some(idx) = store.items.iter().position(|i| i.name == name_or_id || i.id == name_or_id) else {
+            return Err(format!("no UI configuration {name_or_id:?}"));
+        };
+        let removed = store.items.remove(idx);
+        if store.active.as_deref() == Some(&removed.name) {
+            store.active = store.items.first().map(|i| i.name.clone());
+        }
+        store.save().map_err(|e| format!("Cannot write ui-configs.json: {e}"))?;
+        Ok(removed.name)
+    }
 
     fn confirm(&mut self, title: &str, detail: &str, command: &str, args: Value, window: &mut Window, cx: &mut Context<Self>) {
         let spec = json!({ "mod": "confirm", "kind": "dialog", "width": 380,

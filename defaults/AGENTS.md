@@ -693,6 +693,10 @@ The main ones:
   Terminals display Kitty graphics, including Unicode placeholder images used by
   programs such as yazi; partial images and scrolling follow the placeholder cells.
 - Agents: `agent.next`, `agent.prev`, `agent.select {index}`, `agent.focus {terminal}`.
+- UI configurations (device-local snapshots of every machine's spaces + this
+  screen's view; not Look layouts): `ui_config.save {name, overwrite?}`,
+  `ui_config.restore {name|id, confirmed?}`, `ui_config.delete {name|id, confirmed?}`,
+  `ui_config.list`. Stored in `ui-configs.json`. Settings → Configurations.
 - Layout: `layout.switch {name?}`, `layout.toggle {id}`, `layout.show {id}`, `layout.hide {id}`,
   `layout.resize {id, px | weight}`, `layout.select {stack, child}`, `layout.set {layout}`
   (personal tree edits; on shipped layouts only click/look fields change),

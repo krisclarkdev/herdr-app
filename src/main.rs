@@ -29,6 +29,7 @@ mod programs;
 mod remote_shell;
 mod settings;
 mod startup_script;
+mod ui_config;
 mod setup;
 mod sound;
 mod spawn;

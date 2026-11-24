@@ -53,6 +53,9 @@ const NAMED = [
   ["window.maximize", {}, "Window", "Maximize window", "restore"],
   ["window.close", {}, "Window", "Close window", "quit"],
   ["app.settings", {}, "App", "Settings", "preferences options config look font theme sound"],
+  ["app.settings", { section: "configurations" }, "App", "UI configurations…", "ui config save restore snapshot spaces"],
+  ["ui_config.save", {}, "App", "Save UI configuration…", "snapshot spaces save as"],
+
   ["app.help", {}, "App", "Keys", "keybindings shortcuts help"],
   ["app.welcome", {}, "App", "Welcome", "intro start onboarding"],
   ["app.whats_new", {}, "App", "What's new", "release changes news update"],
@@ -70,6 +73,7 @@ const HIDDEN = new Set([
   "layout.show", "layout.hide", "layout.resize", "layout.select", "mod.open", "overlay.close",
   "tab.settle", "tab.unsettle",
   "app.palette", "app.hide", "app.hide_others", "app.show_all", "app.theme", "app.settings",
+  "ui_config.restore", "ui_config.delete", "ui_config.list",
 ]);
 
 function titleOf(name) {

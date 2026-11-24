@@ -11,6 +11,7 @@ const SECTIONS = [
   ...(window()?.platform === "macos" ? [{ id: "keyboard", title: "Keyboard", icon: "keyboard" }] : []),
   { id: "machines", title: "Machines", icon: "server" },
   { id: "scripts", title: "Scripts", icon: "script" },
+  { id: "configurations", title: "Configurations", icon: "configs" },
   { id: "alerts", title: "Alerts", icon: "bell" },
   { id: "updates", title: "Updates", icon: "refresh" },
   { id: "privacy", title: "Privacy", icon: "shield" },
@@ -53,6 +54,8 @@ export default class Settings extends View {
     this.scriptInput.on("focus", (_e, cx) => { this.scriptFocused = true; cx.notify(); });
     this.scriptInput.on("blur", (_e, cx) => { this.scriptFocused = false; cx.notify(); });
     this.lastRun = null;
+    this.uiConfigs = { active: null, items: [] };
+    this.uiConfigPick = null;
     this.person = {};
     this.raw = null;
     this.previews = {}; // layout name -> its "preview" picture
@@ -72,6 +75,7 @@ export default class Settings extends View {
       this.syncScriptEditor();
       if (this.section === "machines") await this.loadMachines();
       if (this.section === "scripts") await this.loadLastRun();
+      if (this.section === "configurations") await this.loadUiConfigs();
       cx.notify();
     });
     // After "Check now": follow the look (the answer comes from the app), then
@@ -121,6 +125,22 @@ export default class Settings extends View {
       if (this.lastRun && typeof this.lastRun !== "object") this.lastRun = null;
     } catch {
       this.lastRun = null;
+    }
+  }
+
+  uiConfigsFile() {
+    return `${appHome()}/ui-configs.json`;
+  }
+
+  async loadUiConfigs() {
+    try {
+      const raw = await readTextFile(this.uiConfigsFile());
+      const parsed = raw ? JSON.parse(raw) : { items: [] };
+      this.uiConfigs = parsed && typeof parsed === "object" ? parsed : { items: [] };
+      if (!Array.isArray(this.uiConfigs.items)) this.uiConfigs.items = [];
+      if (!this.uiConfigPick) this.uiConfigPick = this.uiConfigs.active ?? this.uiConfigs.items[0]?.name ?? null;
+    } catch {
+      this.uiConfigs = { active: null, items: [] };
     }
   }
 
@@ -883,6 +903,104 @@ export default class Settings extends View {
       );
   }
 
+  configurations(t) {
+    const items = this.uiConfigs?.items ?? [];
+    const names = items.map((i) => i.name);
+    const pick = this.uiConfigPick && names.includes(this.uiConfigPick) ? this.uiConfigPick : (names[0] ?? null);
+    const selected = items.find((i) => i.name === pick);
+    const machines = selected ? Object.keys(selected.machines ?? {}) : [];
+    const machineLabel = (k) => (k === "" ? "This machine" : k);
+    return v_flex()
+      .w_full()
+      .gap(4)
+      .child(this.heading(t, "UI configurations"))
+      .child(div().text_size(12.5).text_color(t.dim).child("Named snapshots of every machine's spaces plus this screen's selection. Not the same as Look layouts (Herdr / Terminals / Herdr 98)."))
+      .child(
+        this.row(
+          t,
+          "Saved configurations",
+          names.length ? `${names.length} saved` : "None yet — save the current spaces under a name.",
+          h_flex()
+            .gap(8)
+            .flex_wrap()
+            .child(
+              this.button(t, "st-cfg-save", "Save as…", (_e, cx) => {
+                run("ui_config.save", {});
+                cx.spawn(async (cx) => {
+                  await this.loadUiConfigs();
+                  cx.notify();
+                });
+              }),
+            )
+            .when(Boolean(pick), (el) =>
+              el
+                .child(
+                  this.button(t, "st-cfg-restore", "Restore", (_e, cx) => {
+                    run("ui_config.restore", { name: pick });
+                  }),
+                )
+                .child(
+                  this.button(t, "st-cfg-delete", "Delete", (_e, cx) => {
+                    run("ui_config.delete", { name: pick });
+                    cx.spawn(async (cx) => {
+                      await this.loadUiConfigs();
+                      this.uiConfigPick = null;
+                      cx.notify();
+                    });
+                  }),
+                ),
+            ),
+        ),
+      )
+      .when(names.length > 0, (el) =>
+        el.child(
+          v_flex()
+            .w_full()
+            .gap(4)
+            .pt(10)
+            .children(
+              names.map((name) => {
+                const on = name === pick;
+                return h_flex()
+                  .id(`st-cfg-${name}`)
+                  .w_full()
+                  .px(10)
+                  .py(8)
+                  .rounded(8)
+                  .border_1()
+                  .border_color(on ? t.accent : t.border)
+                  .bg(on ? t.raised : t.background)
+                  .cursor_pointer()
+                  .on_click((_e, cx) => {
+                    this.uiConfigPick = name;
+                    cx.notify();
+                  })
+                  .child(div().flex_1().text_size(13.5).text_color(t.foreground).child(name))
+                  .when(this.uiConfigs.active === name, (row) =>
+                    row.child(div().text_size(11).text_color(t.dim).child("active")),
+                  );
+              }),
+            ),
+        ),
+      )
+      .when(Boolean(selected), (el) =>
+        el
+          .child(div().pt(14).text_size(12.5).text_color(t.dim).child(`Machines in “${pick}”: ${machines.map(machineLabel).join(", ") || "none"}`))
+          .child(
+            h_flex()
+              .pt(8)
+              .child(
+                this.button(t, "st-cfg-refresh", "Refresh list", (_e, cx) => {
+                  cx.spawn(async (cx) => {
+                    await this.loadUiConfigs();
+                    cx.notify();
+                  });
+                }),
+              ),
+          ),
+      );
+  }
+
   scripts(t) {
     const enabled = this.person.startup_script_enabled !== false;
     const platform = window()?.platform;
@@ -1052,6 +1170,7 @@ export default class Settings extends View {
               this.handle.focus();
               if (s.id === "machines") cx.spawn(async (cx) => { await this.loadMachines(); cx.notify(); });
               if (s.id === "scripts") cx.spawn(async (cx) => { await this.loadLastRun(); this.syncScriptEditor(); cx.notify(); });
+              if (s.id === "configurations") cx.spawn(async (cx) => { await this.loadUiConfigs(); cx.notify(); });
               cx.notify();
             })
             .child(svg(I(s.icon)).size(15).text_color(on ? t.accent : t.dim))
@@ -1119,6 +1238,8 @@ export default class Settings extends View {
                         ? this.machines(t)
                       : this.section === "scripts"
                         ? this.scripts(t)
+                      : this.section === "configurations"
+                        ? this.configurations(t)
                       : this.section === "alerts"
                         ? this.alerts(t)
                         : this.section === "privacy"

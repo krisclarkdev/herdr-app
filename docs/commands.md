@@ -538,11 +538,46 @@ No arguments.
 
 ## `app.settings`
 
-Open the settings (section: look, scripts, alerts, updates).
+Open the settings (section: look, scripts, configurations, alerts, updates).
 
 | Argument | Required |
 |---|---|
 | `section` | no |
+
+## `ui_config.save`
+
+Save the current spaces on every machine plus this screen's view as a named UI configuration.
+
+| Argument | Required |
+|---|---|
+| `name` | yes |
+| `overwrite` | no |
+
+## `ui_config.restore`
+
+Replace connected machines' spaces with a named UI configuration (asks first unless confirmed).
+
+| Argument | Required |
+|---|---|
+| `name` | no (name or id) |
+| `id` | no |
+| `confirmed` | no |
+
+## `ui_config.delete`
+
+Delete a named UI configuration (asks first unless confirmed).
+
+| Argument | Required |
+|---|---|
+| `name` | no (name or id) |
+| `id` | no |
+| `confirmed` | no |
+
+## `ui_config.list`
+
+List saved UI configuration names.
+
+No arguments.
 
 ## `app.check_updates`
 
