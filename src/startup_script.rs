@@ -17,6 +17,8 @@ const TRUNCATION_MARK: &str = "\n…[truncated]…\n";
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 
 static RAN_THIS_PROCESS: AtomicBool = AtomicBool::new(false);
+/// Any in-flight run (auto or manual). Prevents overlapping PowerShell jobs.
+static RUNNING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LastRun {
@@ -35,7 +37,14 @@ pub struct LastRun {
 }
 
 impl LastRun {
+    pub fn in_progress(&self) -> bool {
+        self.finished_at_ms == 0
+    }
+
     pub fn failed(&self) -> bool {
+        if self.in_progress() {
+            return false;
+        }
         self.timed_out || self.error.is_some() || self.exit_code != Some(0)
     }
 
@@ -120,9 +129,38 @@ pub fn claim_once() -> bool {
     RAN_THIS_PROCESS.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok()
 }
 
+/// Begin a run (auto or manual). False if another run is already in flight.
+pub fn try_begin_run() -> bool {
+    RUNNING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+}
+
+pub fn end_run() {
+    RUNNING.store(false, Ordering::SeqCst);
+}
+
+pub fn is_running() -> bool {
+    RUNNING.load(Ordering::SeqCst)
+}
+
+/// Mark last-run as in progress so Settings can poll for completion.
+pub fn mark_started() -> LastRun {
+    let run = LastRun {
+        started_at_ms: now_ms(),
+        finished_at_ms: 0,
+        exit_code: None,
+        timed_out: false,
+        stdout: String::new(),
+        stderr: String::new(),
+        error: Some("Running…".into()),
+    };
+    let _ = save_last_run(&run);
+    run
+}
+
 #[cfg(test)]
 pub fn reset_once_for_tests() {
     RAN_THIS_PROCESS.store(false, Ordering::SeqCst);
+    RUNNING.store(false, Ordering::SeqCst);
 }
 
 /// Windows-first auto-run. Non-Windows builds never spawn.
@@ -262,6 +300,19 @@ mod tests {
         assert!(!claim_once());
         reset_once_for_tests();
         assert!(claim_once());
+        reset_once_for_tests();
+    }
+
+    #[test]
+    fn run_busy_gate_blocks_overlap() {
+        reset_once_for_tests();
+        assert!(try_begin_run());
+        assert!(is_running());
+        assert!(!try_begin_run());
+        end_run();
+        assert!(!is_running());
+        assert!(try_begin_run());
+        end_run();
         reset_once_for_tests();
     }
 

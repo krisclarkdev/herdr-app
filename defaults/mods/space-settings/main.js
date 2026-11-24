@@ -25,6 +25,9 @@ export default class SpaceSettings extends View {
     this.input.focus();
     cx.timer.after(600, () => this.input.focus());
     this.handle = cx.focus_handle();
+    this.focusCancel = cx.focus_handle();
+    this.focusSave = cx.focus_handle();
+    cx.timer.every(200, (cx) => cx.notify());
   }
 
   submit() {
@@ -40,6 +43,18 @@ export default class SpaceSettings extends View {
     }
   }
 
+  wrapPreview(text) {
+    return text
+      .split("\n")
+      .slice(0, 10)
+      .flatMap((l) => {
+        const chunks = [];
+        for (let i = 0; i < Math.max(l.length, 1); i += 96) chunks.push(l.slice(i, i + 96) || " ");
+        return chunks;
+      })
+      .join("\n");
+  }
+
   lastRunSummary(t, last) {
     if (!last) return null;
     const when = last.finished_at_ms
@@ -51,9 +66,7 @@ export default class SpaceSettings extends View {
     else if (last.exit_code === 0) status = "Succeeded";
     else status = `Failed (exit ${last.exit_code ?? "?"})`;
     const detail = [last.stderr, last.stdout, last.error].filter(Boolean).join("\n").trim();
-    const preview = detail
-      ? detail.split("\n").slice(0, 8).map((l) => (l.length > 120 ? `${l.slice(0, 117)}…` : l)).join("\n")
-      : "";
+    const preview = detail ? this.wrapPreview(detail) : "";
     return v_flex()
       .pt(14)
       .gap(4)
@@ -70,6 +83,7 @@ export default class SpaceSettings extends View {
             .bg(t.background)
             .text_size(11.5)
             .text_color(t.muted)
+            .whitespace_normal()
             .child(preview),
         ),
       );
@@ -81,15 +95,17 @@ export default class SpaceSettings extends View {
     const title = (p.title ?? "Space").replace(/^./, (c) => c.toUpperCase());
     const last = p.last_run && typeof p.last_run === "object" ? p.last_run : null;
     const label = (text) => div().pt(16).pb(7).text_size(11.5).text_color(t.dim).child(text);
-    const button = (id, text, primary, action) =>
-      h_flex()
+    const button = (id, text, primary, action, focus) => {
+      const on = focus?.is_focused?.() === true;
+      let el = h_flex()
         .id(id)
-        .h(32)
+        .h(36)
+        .min_h(36)
         .px(14)
         .items_center()
         .rounded(8)
         .border_1()
-        .border_color(primary ? t.solid : t.input)
+        .border_color(on ? t.accent : primary ? t.solid : t.input)
         .bg(primary ? t.solid : t.raised)
         .text_color(primary ? t.solid_foreground : t.foreground)
         .text_size(12.5)
@@ -98,6 +114,19 @@ export default class SpaceSettings extends View {
         .hover((s) => s.opacity(0.88))
         .on_click(action)
         .child(text);
+      if (focus) {
+        el = el
+          .track_focus(focus)
+          .tab_stop(true)
+          .on_key_down((e, cx) => {
+            if (e.key === "enter" || e.key === " ") {
+              action(e, cx);
+              cx.stop_propagation();
+            }
+          });
+      }
+      return el;
+    };
     return v_flex()
       .id("space-settings")
       .track_focus(this.handle)
@@ -138,8 +167,8 @@ export default class SpaceSettings extends View {
           .pt(20)
           .gap(8)
           .justify_end()
-          .child(button("ss-cancel", "Cancel", false, () => closeOverlay(p.overlay)))
-          .child(button("ss-save", "Save", true, () => this.submit())),
+          .child(button("ss-cancel", "Cancel", false, () => closeOverlay(p.overlay), this.focusCancel))
+          .child(button("ss-save", "Save", true, () => this.submit(), this.focusSave)),
       );
   }
 }

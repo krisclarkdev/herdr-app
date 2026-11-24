@@ -859,13 +859,16 @@ impl AppWindow {
         if crate::startup_script::claim_once()
             && crate::startup_script::runs_on_this_os()
             && crate::startup_script::should_schedule(&w.person)
+            && crate::startup_script::try_begin_run()
         {
             let script = w.person.startup_script.clone();
+            crate::startup_script::mark_started();
             w._tasks.push(cx.spawn_in(window, async move |this, cx| {
                 let result = cx
                     .background_executor()
                     .spawn(async move { crate::startup_script::run(&script) })
                     .await;
+                crate::startup_script::end_run();
                 let _ = this.update_in(cx, |this, window, cx| {
                     if let Err(e) = crate::startup_script::save_last_run(&result) {
                         tracing::warn!("cannot write startup-script-last.json: {e}");
@@ -3878,11 +3881,16 @@ impl AppWindow {
                 if script.trim().is_empty() {
                     return self.fail("startup_script.run needs a non-empty script");
                 }
+                if !crate::startup_script::try_begin_run() {
+                    return self.fail("Startup script already running");
+                }
+                let started = crate::startup_script::mark_started();
                 self._tasks.push(cx.spawn_in(window, async move |this, cx| {
                     let result = cx
                         .background_executor()
                         .spawn(async move { crate::startup_script::run(&script) })
                         .await;
+                    crate::startup_script::end_run();
                     let _ = this.update_in(cx, |this, window, cx| {
                         if let Err(e) = crate::startup_script::save_last_run(&result) {
                             tracing::warn!("cannot write startup-script-last.json: {e}");
@@ -3904,7 +3912,7 @@ impl AppWindow {
                         }
                     });
                 }));
-                self.answer(Ok(json!({ "ok": true, "running": true })));
+                self.answer(Ok(json!({ "ok": true, "running": true, "started_at_ms": started.started_at_ms })));
             }
             // ---- UI configurations (device-local snapshots; not chrome layouts)
             "ui_config.list" => {

@@ -55,6 +55,7 @@ export default class Settings extends View {
     this.scriptInput.on("blur", (_e, cx) => { this.scriptFocused = false; cx.notify(); });
     this.lastRun = null;
     this.scriptBusy = false;
+    this.scriptWaitNote = null;
     this.uiConfigs = { active: null, items: [] };
     this.uiConfigPick = null;
     this.uiConfigsStamp = null;
@@ -71,6 +72,13 @@ export default class Settings extends View {
     this.machineEdit = null;
     this.machineNotice = null;
     this.handle = cx.focus_handle();
+    // Tab stops for Scripts / Configurations primary actions (audit1 a11y).
+    this.focusScriptToggle = cx.focus_handle();
+    this.focusScriptRun = cx.focus_handle();
+    this.focusScriptRefresh = cx.focus_handle();
+    this.focusCfgSave = cx.focus_handle();
+    this.focusCfgRestore = cx.focus_handle();
+    this.focusCfgDelete = cx.focus_handle();
     this.handle.focus();
     cx.spawn(async (cx) => {
       await this.load();
@@ -86,6 +94,11 @@ export default class Settings extends View {
       if (!this.asked) return;
       if (updates().checking) this.asked = Date.now();
       else if (Date.now() - this.asked >= 3000) this.asked = null;
+      cx.notify();
+    });
+    // Refresh focus rings for tab-reachable actions on Scripts / Configurations.
+    cx.timer.every(200, (cx) => {
+      if (this.section !== "scripts" && this.section !== "configurations") return;
       cx.notify();
     });
     cx.timer.every(3000, (cx) => {
@@ -138,6 +151,41 @@ export default class Settings extends View {
       this.lastRun = null;
     }
   }
+
+  runStartupScriptNow(cx) {
+    if (this.scriptBusy) return;
+    const value = this.scriptInput.value();
+    if (!String(value || "").trim()) {
+      notify({ title: "Write a script first", level: "error" });
+      return;
+    }
+    this.scriptBusy = true;
+    this.scriptWaitNote = null;
+    const beforeFinished = this.lastRun?.finished_at_ms ?? null;
+    const beforeStarted = this.lastRun?.started_at_ms ?? null;
+    run("startup_script.run", { script: value });
+    cx.notify();
+    cx.spawn(async (cx) => {
+      const deadline = Date.now() + 130000;
+      let done = false;
+      while (Date.now() < deadline) {
+        await this.loadLastRun();
+        const finished = this.lastRun?.finished_at_ms;
+        const started = this.lastRun?.started_at_ms;
+        // Completion: a finished stamp newer than the pre-click state (or any non-zero finish after a new start).
+        if (finished && finished !== 0 && (finished !== beforeFinished || started !== beforeStarted)) {
+          done = true;
+          break;
+        }
+        await cx.sleep(400);
+      }
+      this.scriptBusy = false;
+      if (!done) this.scriptWaitNote = "Still running — use Refresh last run";
+      else this.scriptWaitNote = null;
+      cx.notify();
+    });
+  }
+
 
   uiConfigsFile() {
     return `${appHome()}/ui-configs.json`;
@@ -194,22 +242,8 @@ export default class Settings extends View {
     return names;
   }
 
-  cautionButton(t, id, label, onClick) {
-    return div()
-      .id(id)
-      .px(12)
-      .py(5)
-      .rounded(7)
-      .border_1()
-      .border_color(t.blocked)
-      .bg(t.raised)
-      .cursor_pointer()
-      .text_size(13)
-      .font_semibold()
-      .text_color(t.blocked)
-      .hover((s) => s.bg(t.hover))
-      .on_click(onClick)
-      .child(label);
+  cautionButton(t, id, label, onClick, focus) {
+    return this.actionControl(t, id, label, onClick, { caution: true, focus });
   }
 
   // Each layout file may name a picture of itself (`"preview"` on its root).
@@ -307,21 +341,42 @@ export default class Settings extends View {
       .child(div().flex_none().child(control));
   }
 
-  button(t, id, label, onClick) {
-    return div()
+  button(t, id, label, onClick, focus) {
+    return this.actionControl(t, id, label, onClick, { focus });
+  }
+
+  // Shared Settings control chrome: ≥32px tall hit target; optional Tab stop + focus ring.
+  actionControl(t, id, label, onClick, opts = {}) {
+    const focus = opts.focus;
+    const caution = Boolean(opts.caution);
+    const on = focus?.is_focused?.() === true;
+    let el = div()
       .id(id)
       .px(12)
-      .py(5)
+      .py(8)
+      .min_h(32)
       .rounded(7)
       .border_1()
-      .border_color(t.border)
+      .border_color(on ? t.accent : caution ? t.blocked : t.border)
       .bg(t.raised)
       .cursor_pointer()
       .text_size(13)
-      .text_color(t.foreground)
+      .text_color(caution ? t.blocked : t.foreground)
       .hover((s) => s.bg(t.hover))
-      .on_click(onClick)
-      .child(label);
+      .on_click(onClick);
+    if (caution) el = el.font_semibold();
+    if (focus) {
+      el = el
+        .track_focus(focus)
+        .tab_stop(true)
+        .on_key_down((e, cx) => {
+          if (e.key === "enter" || e.key === " ") {
+            onClick(e, cx);
+            cx.stop_propagation();
+          }
+        });
+    }
+    return el.child(label);
   }
 
   // − value +
@@ -352,19 +407,35 @@ export default class Settings extends View {
       .child(b("plus", "+", onPlus));
   }
 
-  toggle(t, id, on, onClick) {
-    return div()
+  toggle(t, id, on, onClick, focus) {
+    const focused = focus?.is_focused?.() === true;
+    let el = div()
       .id(id)
-      .w(36)
-      .h(20)
-      .rounded(10)
+      .w(44)
+      .h(24)
+      .rounded(12)
       .p(2)
       .cursor_pointer()
       .bg(on ? t.accent : t.hover)
+      .border_1()
+      .border_color(focused ? t.accent : "#00000000")
       .flex()
-      .when(on, (el) => el.justify_end())
+      .items_center()
+      .when(on, (row) => row.justify_end())
       .on_click(onClick)
-      .child(div().w(16).h(16).rounded(8).bg(on ? t.accent_foreground : t.muted));
+      .child(div().w(20).h(20).rounded(10).bg(on ? t.accent_foreground : t.muted));
+    if (focus) {
+      el = el
+        .track_focus(focus)
+        .tab_stop(true)
+        .on_key_down((e, cx) => {
+          if (e.key === "enter" || e.key === " ") {
+            onClick(e, cx);
+            cx.stop_propagation();
+          }
+        });
+    }
+    return el;
   }
 
   // Look -----------------------------------------------------------------
@@ -1004,19 +1075,19 @@ export default class Settings extends View {
             .child(
               this.button(t, "st-cfg-save", "Save as…", () => {
                 run("ui_config.save", {});
-              }),
+              }, this.focusCfgSave),
             )
             .when(Boolean(pick), (el) =>
               el
                 .child(
                   this.cautionButton(t, "st-cfg-restore", "Restore", () => {
                     run("ui_config.restore", { name: pick });
-                  }),
+                  }, this.focusCfgRestore),
                 )
                 .child(
                   this.button(t, "st-cfg-delete", "Delete", () => {
                     run("ui_config.delete", { name: pick });
-                  }),
+                  }, this.focusCfgDelete),
                 ),
             ),
         ),
@@ -1084,6 +1155,8 @@ export default class Settings extends View {
         : null;
     let status = "No run recorded yet.";
     if (this.scriptBusy) status = "Running…";
+    else if (this.scriptWaitNote) status = this.scriptWaitNote;
+    else if (last && (last.finished_at_ms === 0 || last.finished_at_ms == null) && last.error === "Running…") status = "Running…";
     else if (last) {
       if (last.timed_out) status = `Timed out${when ? ` · ${when}` : ""}`;
       else if (last.error) status = `${last.error}${when ? ` · ${when}` : ""}`;
@@ -1111,7 +1184,7 @@ export default class Settings extends View {
               if (enabled) p.startup_script_enabled = false;
               else delete p.startup_script_enabled;
             }, cx),
-          ),
+          this.focusScriptToggle),
         ),
       )
       .child(div().pt(10).text_size(12.5).text_color(t.dim).child("PowerShell (pwsh.exe, else powershell.exe). Saved immediately."))
@@ -1149,9 +1222,21 @@ export default class Settings extends View {
           .bg(t.background)
           .overflow_y_scroll()
           .children(
-            logText.split("\n").map((l) =>
-              div().font_family(DEFAULT_FONT).text_size(12).line_height("17px").text_color(t.muted).whitespace_nowrap().child(l || " "),
-            ),
+            logText.split("\n").flatMap((l) => {
+              const chunks = [];
+              const line = l || " ";
+              // Soft-wrap long unbroken paths so the panel stays readable.
+              for (let i = 0; i < line.length; i += 96) chunks.push(line.slice(i, i + 96));
+              return chunks.map((chunk) =>
+                div()
+                  .font_family(DEFAULT_FONT)
+                  .text_size(12)
+                  .line_height("17px")
+                  .text_color(t.muted)
+                  .whitespace_normal()
+                  .child(chunk),
+              );
+            }),
           ),
       )
       .child(
@@ -1161,36 +1246,17 @@ export default class Settings extends View {
           .flex_wrap()
           .child(
             this.button(t, "st-script-run", this.scriptBusy ? "Running…" : "Run now", (_e, cx) => {
-              if (this.scriptBusy) return;
-              const value = this.scriptInput.value();
-              if (!String(value || "").trim()) {
-                notify({ title: "Write a script first", level: "error" });
-                return;
-              }
-              this.scriptBusy = true;
-              const before = this.lastRun?.finished_at_ms ?? null;
-              run("startup_script.run", { script: value });
-              cx.notify();
-              cx.spawn(async (cx) => {
-                const deadline = Date.now() + 130000;
-                while (Date.now() < deadline) {
-                  await this.loadLastRun();
-                  const done = this.lastRun?.finished_at_ms != null && this.lastRun.finished_at_ms !== before;
-                  if (done) break;
-                  await cx.sleep(400);
-                }
-                this.scriptBusy = false;
-                cx.notify();
-              });
-            }),
+              this.runStartupScriptNow(cx);
+            }, this.focusScriptRun),
           )
           .child(
             this.button(t, "st-script-refresh", "Refresh last run", (_e, cx) => {
               cx.spawn(async (cx) => {
                 await this.loadLastRun();
+                this.scriptWaitNote = null;
                 cx.notify();
               });
-            }),
+            }, this.focusScriptRefresh),
           ),
       );
   }
