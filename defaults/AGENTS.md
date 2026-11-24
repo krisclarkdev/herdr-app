@@ -603,7 +603,8 @@ The main ones:
   else in that machine's home),
   `space.close {id?, confirmed?}`, `space.rename {id?, name}` ("": Herdr's name again),
   `space.settings {id?}` (startup command dialog),
-  `space.set_startup_command {id?, command? | name? | value?}` (empty: none; runs once when the space opens),
+  `space.set_startup_command {id?, command? | name? | value?}` (empty: none; applies on next open),
+  `space.run_startup_command {id?, command?}` (run now; does not consume the once-per-open auto-run),
   `space.move {id, index}`, `space.select {index | id}`, `space.next`, `space.prev`.
   With no `argv`, the target core chooses that machine's default shell (PowerShell 7 when available on Windows).
 - Tabs: `tab.new {name?, space?, folder?, argv?, task?, focus?}` (argv: an

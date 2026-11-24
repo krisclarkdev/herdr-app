@@ -68,6 +68,15 @@ Set the shell command run once when a space opens (empty: none). Persists on the
 | `name` | no |
 | `value` | no |
 
+## `space.run_startup_command`
+
+Run a space's startup command now (optional command overrides the saved one). Does not consume the once-per-open auto-run.
+
+| Argument | Required |
+|---|---|
+| `id` | no |
+| `command` | no |
+
 ## `space.move`
 
 Move a space to a position (1 = first).

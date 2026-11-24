@@ -2126,11 +2126,39 @@ impl AppWindow {
         if !self.space_startup.claim(&id) {
             return;
         }
-        let space_id = id;
+        self.spawn_space_startup(id, command, name, cwd, machine, window, cx);
+    }
+
+    /// Background space startup (auto or manual). Does not touch the once-per-open gate.
+    fn spawn_space_startup(
+        &mut self,
+        space_id: String,
+        command: String,
+        name: String,
+        cwd: Option<String>,
+        machine: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let started_at_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
+        let pending = crate::space_startup::LastRun {
+            space_id: space_id.clone(),
+            space_name: name.clone(),
+            command: command.clone(),
+            started_at_ms,
+            finished_at_ms: 0,
+            exit_code: None,
+            timed_out: false,
+            stdout: String::new(),
+            stderr: String::new(),
+            error: Some("Running…".into()),
+        };
+        if let Err(e) = crate::space_startup::save_last_run(&pending) {
+            tracing::warn!("cannot write space-startup-last.json: {e}");
+        }
         cx.spawn_in(window, async move |this, cx| {
             let result = cx.background_executor().spawn({
                 let command = command.clone();
@@ -3358,6 +3386,28 @@ impl AppWindow {
                 else { return self.fail("space.set_startup_command needs command") };
                 let Some(p) = self.model.space_mut(&id) else { return self.fail(format!("no space {id:?}")) };
                 p.startup_command = command;
+            }
+            "space.run_startup_command" => {
+                // Manual verify from space.settings; does not consume the once-per-open gate.
+                let Some(id) = Self::owned(a, "id").or_else(|| self.model.active.clone()) else {
+                    return self.fail("no space");
+                };
+                let Some(space) = self.model.space(&id) else {
+                    return self.fail(format!("no space {id:?}"));
+                };
+                let command = a
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| space.startup_command.clone());
+                if !crate::space_startup::should_run(&command) {
+                    return self.fail("space.run_startup_command needs a non-empty command");
+                }
+                let name = self.model.space_name(space, &home());
+                let machine = space.machine.clone();
+                let cwd = crate::space_startup::resolve_cwd(&space.folder, machine.as_deref(), &home());
+                self.spawn_space_startup(id, command, name, cwd, machine, window, cx);
+                self.answer(Ok(json!({ "ok": true, "running": true })));
             }
             "space.select" => {
                 let id = Self::owned(a, "id").or_else(|| {

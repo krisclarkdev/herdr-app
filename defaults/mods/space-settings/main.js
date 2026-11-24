@@ -1,7 +1,7 @@
 // Per-space settings: startup command. Enter saves, Esc cancels.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { run, props, closeOverlay, theme } from "herdr";
+import { run, props, closeOverlay, theme, appHome, readTextFile, notify } from "herdr";
 
 export default class SpaceSettings extends View {
   init(_props, cx) {
@@ -27,13 +27,83 @@ export default class SpaceSettings extends View {
     this.handle = cx.focus_handle();
     this.focusCancel = cx.focus_handle();
     this.focusSave = cx.focus_handle();
+    this.focusRun = cx.focus_handle();
+    this.runBusy = false;
+    this.runNote = null;
+    this.last = props()?.last_run && typeof props().last_run === "object" ? props().last_run : null;
     cx.timer.every(200, (cx) => cx.notify());
+  }
+
+  lastRunFile() {
+    return `${appHome()}/space-startup-last.json`;
+  }
+
+  async loadLastRun() {
+    try {
+      const raw = await readTextFile(this.lastRunFile());
+      const parsed = raw ? JSON.parse(raw) : null;
+      const id = props()?.id;
+      if (parsed && typeof parsed === "object" && (!id || parsed.space_id === id)) this.last = parsed;
+      else if (!parsed) this.last = null;
+    } catch {
+      this.last = null;
+    }
   }
 
   submit() {
     const p = props();
     closeOverlay(p.overlay);
     run(p.command.name, { ...(p.command.args ?? {}), command: this.text });
+  }
+
+  runNow(cx) {
+    if (this.runBusy) return;
+    const value = this.text;
+    if (!String(value || "").trim()) {
+      notify({ title: "Write a command first", level: "error" });
+      return;
+    }
+    const p = props() ?? {};
+    this.runBusy = true;
+    this.runNote = null;
+    const beforeStarted = this.last?.started_at_ms ?? null;
+    const beforeFinished = this.last?.finished_at_ms ?? null;
+    run("space.run_startup_command", { id: p.id, command: value });
+    cx.notify();
+    cx.spawn(async (cx) => {
+      let accepted = false;
+      const acceptDeadline = Date.now() + 1200;
+      while (Date.now() < acceptDeadline) {
+        await this.loadLastRun();
+        if (this.last?.started_at_ms != null && this.last.started_at_ms !== beforeStarted) {
+          accepted = true;
+          break;
+        }
+        await cx.sleep(100);
+      }
+      if (!accepted) {
+        this.runBusy = false;
+        this.runNote = "Did not start — refused or already failing";
+        cx.notify();
+        return;
+      }
+      const deadline = Date.now() + 130000;
+      let done = false;
+      while (Date.now() < deadline) {
+        await this.loadLastRun();
+        const finished = this.last?.finished_at_ms;
+        const started = this.last?.started_at_ms;
+        if (finished && finished !== 0 && (finished !== beforeFinished || started !== beforeStarted)) {
+          done = true;
+          break;
+        }
+        await cx.sleep(400);
+      }
+      this.runBusy = false;
+      if (!done) this.runNote = "Still running — reopen settings to refresh";
+      else this.runNote = null;
+      cx.notify();
+    });
   }
 
   key(e, cx) {
@@ -56,23 +126,27 @@ export default class SpaceSettings extends View {
   }
 
   lastRunSummary(t, last) {
-    if (!last) return null;
-    const when = last.finished_at_ms
+    if (!last && !this.runBusy && !this.runNote) return null;
+    const when = last?.finished_at_ms
       ? new Date(last.finished_at_ms).toLocaleString()
       : null;
     let status = "Last run recorded.";
-    if (last.timed_out) status = "Timed out";
-    else if (last.error) status = last.error;
-    else if (last.exit_code === 0) status = "Succeeded";
-    else status = `Failed (exit ${last.exit_code ?? "?"})`;
-    const detail = [last.stderr, last.stdout, last.error].filter(Boolean).join("\n").trim();
+    if (this.runBusy) status = "Running…";
+    else if (this.runNote) status = this.runNote;
+    else if (last && (last.finished_at_ms === 0 || last.finished_at_ms == null) && last.error === "Running…") status = "Running…";
+    else if (last?.timed_out) status = "Timed out";
+    else if (last?.error) status = last.error;
+    else if (last?.exit_code === 0) status = "Succeeded";
+    else if (last) status = `Failed (exit ${last.exit_code ?? "?"})`;
+    const detail = last ? [last.stderr, last.stdout, last.error === "Running…" ? "" : last.error].filter(Boolean).join("\n").trim() : "";
     const preview = detail ? this.wrapPreview(detail) : "";
+    const ok = last && last.exit_code === 0 && !last.timed_out && !last.error;
     return v_flex()
       .pt(12)
       .gap(4)
       .child(div().text_size(11.5).text_color(t.dim).child("Last run"))
-      .child(div().text_size(12.5).text_color(last.exit_code === 0 && !last.timed_out && !last.error ? t.foreground : t.blocked).child(`${status}${when ? ` · ${when}` : ""}`))
-      .when(Boolean(preview), (el) =>
+      .child(div().text_size(12.5).text_color(ok && !this.runBusy && !this.runNote ? t.foreground : t.blocked).child(`${status}${when && !this.runBusy ? ` · ${when}` : ""}`))
+      .when(Boolean(preview) && !this.runBusy, (el) =>
         el.child(
           div()
             .mt(4)
@@ -89,11 +163,11 @@ export default class SpaceSettings extends View {
       );
   }
 
-  render() {
+  render(cx) {
     const t = theme();
     const p = props() ?? {};
     const title = (p.title ?? "Space").replace(/^./, (c) => c.toUpperCase());
-    const last = p.last_run && typeof p.last_run === "object" ? p.last_run : null;
+    const last = this.last;
     const label = (text) => div().pt(14).pb(6).text_size(11.5).text_color(t.dim).child(text);
     const button = (id, text, primary, action, focus) => {
       const on = focus?.is_focused?.() === true;
@@ -160,14 +234,16 @@ export default class SpaceSettings extends View {
           .pt(6)
           .text_size(11.5)
           .text_color(t.dim)
-          .child("Runs once when this space opens. Empty: do nothing."),
+          .child("Runs once when this space opens (applies on next open). Empty: do nothing."),
       )
-      .when(Boolean(last), (el) => el.child(this.lastRunSummary(t, last)))
+      .when(Boolean(last || this.runBusy || this.runNote), (el) => el.child(this.lastRunSummary(t, last)))
       .child(
         h_flex()
           .pt(16)
           .gap(8)
           .justify_end()
+          .flex_wrap()
+          .child(button("ss-run", this.runBusy ? "Running…" : "Run now", false, (_e, cx) => this.runNow(cx), this.focusRun))
           .child(button("ss-cancel", "Cancel", false, () => closeOverlay(p.overlay), this.focusCancel))
           .child(button("ss-save", "Save", true, () => this.submit(), this.focusSave)),
       );

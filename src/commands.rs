@@ -35,6 +35,7 @@ pub const COMMANDS: &[Command] = &[
     cmd("space.rename", &[opt("id"), opt("name")], "Rename a space (asks the person when no name; an empty name: called after where its first terminal is again)."),
     cmd("space.settings", &[opt("id")], "Open settings for a space (startup command)."),
     cmd("space.set_startup_command", &[opt("id"), opt("command"), opt("name"), opt("value")], "Set the shell command run once when a space opens (empty: none)."),
+    cmd("space.run_startup_command", &[opt("id"), opt("command")], "Run a space's startup command now (optional command overrides the saved one). Does not consume the once-per-open auto-run."),
     cmd("space.move", &[req("id"), req("index")], "Move a space to a position (1 = first)."),
     cmd("tab.new", &[opt("name"), opt("space"), opt("folder"), opt("argv"), opt("task"), opt("mod"), opt("props"), opt("focus")],
         "Make a tab in a space (default: the selected one; name default: none, so it's called by its number) with a terminal in folder (default: the focused terminal's), optionally an agent (argv) and its first message (task); or with a mod as its only pane (`mod`, its `props`: a file, a board). It is shown at once; focus false adds it last in its space and keeps the shown space and the target space's selected tab. With no space open, a person's new tab starts a space (as space.new)."),

@@ -117,7 +117,14 @@ impl LastRun {
         }
     }
 
+    pub fn in_progress(&self) -> bool {
+        self.finished_at_ms == 0
+    }
+
     pub fn failed(&self) -> bool {
+        if self.in_progress() {
+            return false;
+        }
         self.timed_out || self.error.is_some() || self.exit_code != Some(0)
     }
 }

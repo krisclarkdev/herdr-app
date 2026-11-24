@@ -38,6 +38,7 @@ const NAMED = [
   ["space.new", {}, "Space", "New space", "workspace"],
   ["space.rename", {}, "Space", "Rename space", "workspace"],
   ["space.settings", {}, "Space", "Space settings", "workspace startup"],
+  ["space.run_startup_command", {}, "Space", "Run space startup now", "startup command test verify"],
   ["space.close", {}, "Space", "Close space", "workspace kill"],
   ["space.next", {}, "Space", "Next space", "workspace"],
   ["space.prev", {}, "Space", "Previous space", "workspace"],
