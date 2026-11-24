@@ -98,6 +98,15 @@ pub fn document_from_value(value: &Value) -> Result<Document, String> {
     serde_json::from_value(value.clone()).map_err(|e| format!("Corrupt configuration document: {e}"))
 }
 
+
+/// Whether the next document flush should `doc.set` the projected capture.
+/// After a restore/clear, leave `slot_document` as the prior accepted value so
+/// this stays true; pre-setting it to `projected` makes flush do `doc.get` only.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn flush_will_set(slot_document: Option<&Document>, projected: &Document, available: bool) -> bool {
+    available && slot_document != Some(projected)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,5 +156,25 @@ mod tests {
         let value = serde_json::json!({ "spaces": [], "pad": "x".repeat(MAX_DOCUMENT_BYTES) });
         assert!(ensure_document_size(&value).is_err());
         assert!(ensure_document_size(&serde_json::json!({"spaces": []})).is_ok());
+    }
+
+    #[test]
+    fn restore_must_not_pre_set_slot_document_or_flush_skips_set() {
+        let prior = document_from_value(&serde_json::json!({
+            "spaces": [{"id": "s", "name": "old", "folder": "/", "tabs": [{"id": "t"}]}]
+        }))
+        .unwrap();
+        let projected = Document::default();
+        // Correct restore: leave prior accepted document on the slot.
+        assert!(
+            flush_will_set(Some(&prior), &projected, true),
+            "flush must doc.set when slot still holds the pre-restore document"
+        );
+        // Bug: pre-setting slot.document to the new capture makes flush doc.get only.
+        assert!(
+            !flush_will_set(Some(&projected), &projected, true),
+            "pre-setting slot.document to the projection must not be done before flush"
+        );
+        assert!(!flush_will_set(Some(&prior), &projected, false));
     }
 }

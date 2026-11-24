@@ -4159,11 +4159,10 @@ impl AppWindow {
             }
             let doc = crate::ui_config::document_from_value(value)?;
             let on = (!machine.is_empty()).then_some(machine.as_str());
+            // Apply into the model only. Leave slot.document as the prior accepted
+            // value so the next flush CAS-writes via doc.set (pre-setting it to the
+            // new capture would make flush do doc.get instead).
             doc.replace(&mut self.model, on);
-            if let Some(slot) = self.documents.get_mut(machine) {
-                slot.document = Some(doc);
-                slot.dirty = true;
-            }
         }
 
         for machine in live_keys {
@@ -4176,10 +4175,6 @@ impl AppWindow {
             }
             let on = (!machine.is_empty()).then_some(machine.as_str());
             crate::mirror::Document::default().replace(&mut self.model, on);
-            if let Some(slot) = self.documents.get_mut(&machine) {
-                slot.document = Some(crate::mirror::Document::default());
-                slot.dirty = true;
-            }
         }
 
         if let Ok(view) = serde_json::from_value::<crate::mirror::View>(item.view.clone()) {
