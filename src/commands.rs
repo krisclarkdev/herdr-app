@@ -98,6 +98,7 @@ pub const COMMANDS: &[Command] = &[
     cmd("app.feedback", &[opt("message"), opt("from")], "Draft feedback for the person to review and send (from: person or agent)."),
     cmd("app.palette", &[], "Toggle the command palette: every command by name, with its key; calling again closes it."),
     cmd("app.settings", &[opt("section")], "Open the settings (section: look, scripts, configurations, alerts, updates)."),
+    cmd("startup_script.run", &[opt("script")], "Run the app startup PowerShell now (Settings → Scripts test; optional script overrides the saved one). Does not consume the once-per-window auto-run."),
     cmd("ui_config.save", &[req("name"), opt("overwrite")], "Save the current spaces on every machine plus this screen's view as a named UI configuration."),
     cmd("ui_config.restore", &[opt("name"), opt("id"), opt("confirmed")], "Replace connected machines' spaces with a named UI configuration (asks first unless confirmed)."),
     cmd("ui_config.delete", &[opt("name"), opt("id"), opt("confirmed")], "Delete a named UI configuration (asks first unless confirmed)."),

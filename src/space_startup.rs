@@ -1,12 +1,17 @@
 //! Per-space startup command: once per open generation, background, toast on failure.
 
+use crate::persist;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
-    time::Duration,
+    path::PathBuf,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 const TIMEOUT: Duration = Duration::from_secs(120);
 const OUTPUT_CAP: usize = 4 * 1024;
+const LAST_RUN_FILE: &str = "space-startup-last.json";
+const BODY_OUTPUT_CAP: usize = 400;
 
 /// Session-only: space ids whose non-empty startup command already ran this open generation.
 #[derive(Clone, Debug, Default)]
@@ -35,12 +40,16 @@ impl Gate {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RunResult {
     pub exit_code: Option<i32>,
+    #[serde(default)]
     pub timed_out: bool,
+    #[serde(default)]
     pub stdout: String,
+    #[serde(default)]
     pub stderr: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
@@ -71,6 +80,65 @@ impl RunResult {
     }
 }
 
+/// Last space-startup run persisted for Settings / space.settings diagnosis.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LastRun {
+    pub space_id: String,
+    pub space_name: String,
+    #[serde(default)]
+    pub command: String,
+    pub started_at_ms: u64,
+    pub finished_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub timed_out: bool,
+    #[serde(default)]
+    pub stdout: String,
+    #[serde(default)]
+    pub stderr: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl LastRun {
+    pub fn from_result(space_id: &str, space_name: &str, command: &str, started_at_ms: u64, result: &RunResult) -> Self {
+        Self {
+            space_id: space_id.to_owned(),
+            space_name: space_name.to_owned(),
+            command: command.to_owned(),
+            started_at_ms,
+            finished_at_ms: now_ms(),
+            exit_code: result.exit_code,
+            timed_out: result.timed_out,
+            stdout: result.stdout.clone(),
+            stderr: result.stderr.clone(),
+            error: result.error.clone(),
+        }
+    }
+
+    pub fn failed(&self) -> bool {
+        self.timed_out || self.error.is_some() || self.exit_code != Some(0)
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+pub fn last_run_path() -> PathBuf {
+    crate::mods::app_dir().join(LAST_RUN_FILE)
+}
+
+pub fn load_last_run() -> Option<LastRun> {
+    let text = std::fs::read_to_string(last_run_path()).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+pub fn save_last_run(run: &LastRun) -> std::io::Result<()> {
+    let body = serde_json::to_string_pretty(run).unwrap_or_else(|_| "{}".into()) + "\n";
+    persist::write_atomic(&last_run_path(), body)
+}
 
 /// Folder for exec cwd. Empty/`~` → local home on this machine; for a remote, omit cwd
 /// so `hc exec` uses that machine's home (never the viewer's home path).
@@ -91,13 +159,50 @@ pub fn should_run(command: &str) -> bool {
     !command.trim().is_empty()
 }
 
-/// Toast for a failed space startup (optional action focuses the space).
+fn toast_body(result: &RunResult) -> String {
+    let reason = result.short_reason();
+    let extra = result.stderr.trim();
+    if extra.is_empty() {
+        return reason;
+    }
+    // short_reason already includes the first stderr line for exit codes; append more when useful.
+    let rest: String = extra.lines().skip(1).take(6).collect::<Vec<_>>().join("\n");
+    let rest = if rest.is_empty() {
+        if reason.contains(extra.lines().next().unwrap_or("")) {
+            String::new()
+        } else {
+            truncate_body(extra)
+        }
+    } else {
+        truncate_body(&rest)
+    };
+    if rest.is_empty() {
+        reason
+    } else if reason.is_empty() {
+        rest
+    } else {
+        format!("{reason}\n{rest}")
+    }
+}
+
+fn truncate_body(s: &str) -> String {
+    if s.len() <= BODY_OUTPUT_CAP {
+        return s.to_owned();
+    }
+    let mut end = BODY_OUTPUT_CAP;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &s[..end])
+}
+
+/// Toast for a failed space startup — opens space.settings with the command focused.
 pub fn failure_notification(space_name: &str, space_id: &str, result: &RunResult) -> serde_json::Value {
     serde_json::json!({
         "title": format!("Startup command failed in {space_name}"),
-        "body": result.short_reason(),
+        "body": toast_body(result),
         "level": "error",
-        "action": { "name": "space.select", "args": { "id": space_id } },
+        "action": { "name": "space.settings", "args": { "id": space_id } },
     })
 }
 
@@ -227,21 +332,54 @@ mod tests {
     }
 
     #[test]
-    fn failure_notification_focuses_space() {
+    fn failure_notification_opens_space_settings() {
         let n = failure_notification(
             "Work",
             "s1",
             &RunResult {
                 exit_code: Some(1),
-                stderr: "boom\nmore".into(),
+                stderr: "boom\nmore detail".into(),
                 ..Default::default()
             },
         );
         assert_eq!(n["title"], "Startup command failed in Work");
         assert_eq!(n["level"], "error");
         assert!(n["body"].as_str().unwrap().contains("Exit code 1"));
-        assert_eq!(n["action"]["name"], "space.select");
+        assert!(n["body"].as_str().unwrap().contains("more detail"));
+        assert_eq!(n["action"]["name"], "space.settings");
         assert_eq!(n["action"]["args"]["id"], "s1");
+    }
+
+    #[test]
+    fn last_run_round_trips() {
+        let dir = std::env::temp_dir().join(format!(
+            "herdr-space-startup-last-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let prev = std::env::var_os("HERDR_APP_HOME");
+        unsafe { std::env::set_var("HERDR_APP_HOME", &dir) };
+        let run = LastRun {
+            space_id: "s1".into(),
+            space_name: "Work".into(),
+            command: "false".into(),
+            started_at_ms: 1,
+            finished_at_ms: 2,
+            exit_code: Some(1),
+            timed_out: false,
+            stdout: String::new(),
+            stderr: "boom".into(),
+            error: None,
+        };
+        assert!(run.failed());
+        save_last_run(&run).unwrap();
+        assert_eq!(load_last_run().as_ref(), Some(&run));
+        match prev {
+            Some(v) => unsafe { std::env::set_var("HERDR_APP_HOME", v) },
+            None => unsafe { std::env::remove_var("HERDR_APP_HOME") },
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[cfg(unix)]

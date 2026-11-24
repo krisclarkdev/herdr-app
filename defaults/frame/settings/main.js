@@ -54,8 +54,10 @@ export default class Settings extends View {
     this.scriptInput.on("focus", (_e, cx) => { this.scriptFocused = true; cx.notify(); });
     this.scriptInput.on("blur", (_e, cx) => { this.scriptFocused = false; cx.notify(); });
     this.lastRun = null;
+    this.scriptBusy = false;
     this.uiConfigs = { active: null, items: [] };
     this.uiConfigPick = null;
+    this.uiConfigsStamp = null;
     this.person = {};
     this.raw = null;
     this.previews = {}; // layout name -> its "preview" picture
@@ -90,6 +92,15 @@ export default class Settings extends View {
       if (this.section !== "machines") return;
       cx.spawn(async (cx) => {
         await this.loadMachines();
+        cx.notify();
+      });
+    });
+    // Configurations: reload only after the on-disk store changes (successful save/delete),
+    // never on the click that merely opens a prompt/confirm.
+    cx.timer.every(1000, (cx) => {
+      if (this.section !== "configurations") return;
+      cx.spawn(async (cx) => {
+        await this.loadUiConfigsIfChanged();
         cx.notify();
       });
     });
@@ -135,13 +146,70 @@ export default class Settings extends View {
   async loadUiConfigs() {
     try {
       const raw = await readTextFile(this.uiConfigsFile());
+      this.uiConfigsStamp = raw ?? "";
       const parsed = raw ? JSON.parse(raw) : { items: [] };
       this.uiConfigs = parsed && typeof parsed === "object" ? parsed : { items: [] };
       if (!Array.isArray(this.uiConfigs.items)) this.uiConfigs.items = [];
       if (!this.uiConfigPick) this.uiConfigPick = this.uiConfigs.active ?? this.uiConfigs.items[0]?.name ?? null;
+      const names = this.uiConfigs.items.map((i) => i.name);
+      if (this.uiConfigPick && !names.includes(this.uiConfigPick)) {
+        this.uiConfigPick = this.uiConfigs.active ?? names[0] ?? null;
+      }
     } catch {
       this.uiConfigs = { active: null, items: [] };
+      this.uiConfigsStamp = null;
     }
+  }
+
+  async loadUiConfigsIfChanged() {
+    try {
+      const raw = await readTextFile(this.uiConfigsFile());
+      const stamp = raw ?? "";
+      if (this.uiConfigsStamp === stamp) return;
+      this.uiConfigsStamp = stamp;
+      const parsed = raw ? JSON.parse(raw) : { items: [] };
+      this.uiConfigs = parsed && typeof parsed === "object" ? parsed : { items: [] };
+      if (!Array.isArray(this.uiConfigs.items)) this.uiConfigs.items = [];
+      const names = this.uiConfigs.items.map((i) => i.name);
+      if (!this.uiConfigPick || !names.includes(this.uiConfigPick)) {
+        this.uiConfigPick = this.uiConfigs.active ?? names[0] ?? null;
+      }
+    } catch {
+      if (this.uiConfigsStamp === null) return;
+      this.uiConfigs = { active: null, items: [] };
+      this.uiConfigsStamp = null;
+      this.uiConfigPick = null;
+    }
+  }
+
+  spaceNamesInConfig(item) {
+    const names = [];
+    for (const doc of Object.values(item?.machines ?? {})) {
+      const spaces = Array.isArray(doc?.spaces) ? doc.spaces : [];
+      for (const s of spaces) {
+        const label = (s?.name && String(s.name).trim()) || (s?.folder && String(s.folder).trim()) || s?.id || "Space";
+        names.push(label);
+      }
+    }
+    return names;
+  }
+
+  cautionButton(t, id, label, onClick) {
+    return div()
+      .id(id)
+      .px(12)
+      .py(5)
+      .rounded(7)
+      .border_1()
+      .border_color(t.blocked)
+      .bg(t.raised)
+      .cursor_pointer()
+      .text_size(13)
+      .font_semibold()
+      .text_color(t.blocked)
+      .hover((s) => s.bg(t.hover))
+      .on_click(onClick)
+      .child(label);
   }
 
   // Each layout file may name a picture of itself (`"preview"` on its root).
@@ -910,11 +978,21 @@ export default class Settings extends View {
     const selected = items.find((i) => i.name === pick);
     const machines = selected ? Object.keys(selected.machines ?? {}) : [];
     const machineLabel = (k) => (k === "" ? "This machine" : k);
+    const spaces = selected ? this.spaceNamesInConfig(selected) : [];
+    const savedAt = selected?.saved_at_ms ? new Date(selected.saved_at_ms).toLocaleString() : null;
+    const spaceLine = !selected
+      ? null
+      : spaces.length === 0
+        ? "No spaces in this snapshot."
+        : spaces.length <= 6
+          ? `${spaces.length} space${spaces.length === 1 ? "" : "s"}: ${spaces.join(", ")}`
+          : `${spaces.length} spaces: ${spaces.slice(0, 5).join(", ")} (+${spaces.length - 5} more)`;
     return v_flex()
       .w_full()
       .gap(4)
       .child(this.heading(t, "UI configurations"))
       .child(div().text_size(12.5).text_color(t.dim).child("Named snapshots of every machine's spaces plus this screen's selection. Not the same as Look layouts (Herdr / Terminals / Herdr 98)."))
+      .child(div().text_size(12).text_color(t.dim).child('“Active” means the last configuration saved or restored on this device.'))
       .child(
         this.row(
           t,
@@ -924,29 +1002,20 @@ export default class Settings extends View {
             .gap(8)
             .flex_wrap()
             .child(
-              this.button(t, "st-cfg-save", "Save as…", (_e, cx) => {
+              this.button(t, "st-cfg-save", "Save as…", () => {
                 run("ui_config.save", {});
-                cx.spawn(async (cx) => {
-                  await this.loadUiConfigs();
-                  cx.notify();
-                });
               }),
             )
             .when(Boolean(pick), (el) =>
               el
                 .child(
-                  this.button(t, "st-cfg-restore", "Restore", (_e, cx) => {
+                  this.cautionButton(t, "st-cfg-restore", "Restore", () => {
                     run("ui_config.restore", { name: pick });
                   }),
                 )
                 .child(
-                  this.button(t, "st-cfg-delete", "Delete", (_e, cx) => {
+                  this.button(t, "st-cfg-delete", "Delete", () => {
                     run("ui_config.delete", { name: pick });
-                    cx.spawn(async (cx) => {
-                      await this.loadUiConfigs();
-                      this.uiConfigPick = null;
-                      cx.notify();
-                    });
                   }),
                 ),
             ),
@@ -985,7 +1054,9 @@ export default class Settings extends View {
       )
       .when(Boolean(selected), (el) =>
         el
-          .child(div().pt(14).text_size(12.5).text_color(t.dim).child(`Machines in “${pick}”: ${machines.map(machineLabel).join(", ") || "none"}`))
+          .child(div().pt(14).text_size(12.5).text_color(t.foreground).child(spaceLine))
+          .when(Boolean(savedAt), (row) => row.child(div().pt(4).text_size(12).text_color(t.dim).child(`Saved ${savedAt}`)))
+          .child(div().pt(4).text_size(12.5).text_color(t.dim).child(`Machines: ${machines.map(machineLabel).join(", ") || "none"}`))
           .child(
             h_flex()
               .pt(8)
@@ -1012,7 +1083,8 @@ export default class Settings extends View {
         ? new Date(last.started_at_ms).toLocaleString()
         : null;
     let status = "No run recorded yet.";
-    if (last) {
+    if (this.scriptBusy) status = "Running…";
+    else if (last) {
       if (last.timed_out) status = `Timed out${when ? ` · ${when}` : ""}`;
       else if (last.error) status = `${last.error}${when ? ` · ${when}` : ""}`;
       else if (last.exit_code === 0) status = `Succeeded${when ? ` · ${when}` : ""}`;
@@ -1084,7 +1156,34 @@ export default class Settings extends View {
       )
       .child(
         h_flex()
-          .pt(8)
+          .pt(10)
+          .gap(8)
+          .flex_wrap()
+          .child(
+            this.button(t, "st-script-run", this.scriptBusy ? "Running…" : "Run now", (_e, cx) => {
+              if (this.scriptBusy) return;
+              const value = this.scriptInput.value();
+              if (!String(value || "").trim()) {
+                notify({ title: "Write a script first", level: "error" });
+                return;
+              }
+              this.scriptBusy = true;
+              const before = this.lastRun?.finished_at_ms ?? null;
+              run("startup_script.run", { script: value });
+              cx.notify();
+              cx.spawn(async (cx) => {
+                const deadline = Date.now() + 130000;
+                while (Date.now() < deadline) {
+                  await this.loadLastRun();
+                  const done = this.lastRun?.finished_at_ms != null && this.lastRun.finished_at_ms !== before;
+                  if (done) break;
+                  await cx.sleep(400);
+                }
+                this.scriptBusy = false;
+                cx.notify();
+              });
+            }),
+          )
           .child(
             this.button(t, "st-script-refresh", "Refresh last run", (_e, cx) => {
               cx.spawn(async (cx) => {

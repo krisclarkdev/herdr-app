@@ -563,6 +563,14 @@ Open the settings (section: look, scripts, configurations, alerts, updates).
 |---|---|
 | `section` | no |
 
+## `startup_script.run`
+
+Run the app startup PowerShell now (Settings → Scripts test; optional script overrides the saved one). Does not consume the once-per-window auto-run.
+
+| Argument | Required |
+|---|---|
+| `script` | no |
+
 ## `ui_config.save`
 
 Save the current spaces on every machine plus this screen's view as a named UI configuration.

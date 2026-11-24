@@ -2124,10 +2124,19 @@ impl AppWindow {
             return;
         }
         let space_id = id;
+        let started_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
         cx.spawn_in(window, async move |this, cx| {
-            let result = cx.background_executor().spawn(async move {
-                crate::space_startup::run(&command, cwd, machine.as_deref())
+            let result = cx.background_executor().spawn({
+                let command = command.clone();
+                async move { crate::space_startup::run(&command, cwd, machine.as_deref()) }
             }).await;
+            let last = crate::space_startup::LastRun::from_result(&space_id, &name, &command, started_at_ms, &result);
+            if let Err(e) = crate::space_startup::save_last_run(&last) {
+                tracing::warn!("cannot write space-startup-last.json: {e}");
+            }
             if !result.failed() {
                 return;
             }
@@ -3320,6 +3329,9 @@ impl AppWindow {
                     self.close_overlay(&overlay, window, cx);
                     return;
                 }
+                let last_run = crate::space_startup::load_last_run()
+                    .filter(|r| r.space_id == id)
+                    .and_then(|r| serde_json::to_value(r).ok());
                 let spec = json!({
                     "mod": "space-settings",
                     "kind": "dialog",
@@ -3328,6 +3340,7 @@ impl AppWindow {
                         "title": title,
                         "value": value,
                         "id": id,
+                        "last_run": last_run,
                         "command": { "name": "space.set_startup_command", "args": { "id": id } },
                     }
                 });
@@ -3858,6 +3871,40 @@ impl AppWindow {
                     "props": { "message": Self::owned(a, "message").unwrap_or_default(), "from": from, "layout": self.layout_name } });
                 self.open_overlay(mods::new_overlay_id(), spec, window, cx);
                 return;
+            }
+            "startup_script.run" => {
+                // Manual test from Settings → Scripts; does not touch the once-per-window gate.
+                let script = Self::owned(a, "script").unwrap_or_else(|| self.person.startup_script.clone());
+                if script.trim().is_empty() {
+                    return self.fail("startup_script.run needs a non-empty script");
+                }
+                self._tasks.push(cx.spawn_in(window, async move |this, cx| {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move { crate::startup_script::run(&script) })
+                        .await;
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        if let Err(e) = crate::startup_script::save_last_run(&result) {
+                            tracing::warn!("cannot write startup-script-last.json: {e}");
+                        }
+                        tracing::info!(
+                            exit = ?result.exit_code,
+                            timed_out = result.timed_out,
+                            failed = result.failed(),
+                            "startup script (manual) finished"
+                        );
+                        if result.failed() {
+                            let notification = crate::startup_script::failure_notification(&result);
+                            this.open_overlay(
+                                crate::mods::new_overlay_id(),
+                                serde_json::json!({ "kind": "toast", "notification": notification }),
+                                window,
+                                cx,
+                            );
+                        }
+                    });
+                }));
+                self.answer(Ok(json!({ "ok": true, "running": true })));
             }
             // ---- UI configurations (device-local snapshots; not chrome layouts)
             "ui_config.list" => {

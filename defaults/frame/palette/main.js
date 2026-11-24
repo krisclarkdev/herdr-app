@@ -55,6 +55,8 @@ const NAMED = [
   ["window.close", {}, "Window", "Close window", "quit"],
   ["app.settings", {}, "App", "Settings", "preferences options config look font theme sound"],
   ["app.settings", { section: "configurations" }, "App", "UI configurations…", "ui config save restore snapshot spaces"],
+  ["app.settings", { section: "scripts" }, "App", "Startup script…", "powershell run now test"],
+  ["startup_script.run", {}, "App", "Run startup script now", "powershell test scripts"],
   ["ui_config.save", {}, "App", "Save UI configuration…", "snapshot spaces save as"],
 
   ["app.help", {}, "App", "Keys", "keybindings shortcuts help"],

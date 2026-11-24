@@ -40,10 +40,46 @@ export default class SpaceSettings extends View {
     }
   }
 
+  lastRunSummary(t, last) {
+    if (!last) return null;
+    const when = last.finished_at_ms
+      ? new Date(last.finished_at_ms).toLocaleString()
+      : null;
+    let status = "Last run recorded.";
+    if (last.timed_out) status = "Timed out";
+    else if (last.error) status = last.error;
+    else if (last.exit_code === 0) status = "Succeeded";
+    else status = `Failed (exit ${last.exit_code ?? "?"})`;
+    const detail = [last.stderr, last.stdout, last.error].filter(Boolean).join("\n").trim();
+    const preview = detail
+      ? detail.split("\n").slice(0, 8).map((l) => (l.length > 120 ? `${l.slice(0, 117)}…` : l)).join("\n")
+      : "";
+    return v_flex()
+      .pt(14)
+      .gap(4)
+      .child(div().text_size(11.5).text_color(t.dim).child("Last run"))
+      .child(div().text_size(12.5).text_color(last.exit_code === 0 && !last.timed_out && !last.error ? t.foreground : t.blocked).child(`${status}${when ? ` · ${when}` : ""}`))
+      .when(Boolean(preview), (el) =>
+        el.child(
+          div()
+            .mt(4)
+            .p(8)
+            .rounded(8)
+            .border_1()
+            .border_color(t.border)
+            .bg(t.background)
+            .text_size(11.5)
+            .text_color(t.muted)
+            .child(preview),
+        ),
+      );
+  }
+
   render() {
     const t = theme();
     const p = props() ?? {};
     const title = (p.title ?? "Space").replace(/^./, (c) => c.toUpperCase());
+    const last = p.last_run && typeof p.last_run === "object" ? p.last_run : null;
     const label = (text) => div().pt(16).pb(7).text_size(11.5).text_color(t.dim).child(text);
     const button = (id, text, primary, action) =>
       h_flex()
@@ -96,6 +132,7 @@ export default class SpaceSettings extends View {
           .text_color(t.dim)
           .child("Runs once when this space opens. Empty: do nothing."),
       )
+      .when(Boolean(last), (el) => el.child(this.lastRunSummary(t, last)))
       .child(
         h_flex()
           .pt(20)
