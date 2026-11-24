@@ -166,13 +166,32 @@ export default class Settings extends View {
     run("startup_script.run", { script: value });
     cx.notify();
     cx.spawn(async (cx) => {
+      // run() is fire-and-forget: accept only when mark_started writes a new stamp.
+      // Immediate rejects (already running / empty) never touch last-run — clear busy fast.
+      let accepted = false;
+      const acceptDeadline = Date.now() + 1200;
+      while (Date.now() < acceptDeadline) {
+        await this.loadLastRun();
+        if (this.lastRun?.started_at_ms != null && this.lastRun.started_at_ms !== beforeStarted) {
+          accepted = true;
+          break;
+        }
+        await cx.sleep(100);
+      }
+      if (!accepted) {
+        // Command rejected before mark_started (e.g. already running); app fail toast may also show.
+        this.scriptBusy = false;
+        this.scriptWaitNote = "Did not start — already running or refused";
+        cx.notify();
+        return;
+      }
       const deadline = Date.now() + 130000;
       let done = false;
       while (Date.now() < deadline) {
         await this.loadLastRun();
         const finished = this.lastRun?.finished_at_ms;
         const started = this.lastRun?.started_at_ms;
-        // Completion: a finished stamp newer than the pre-click state (or any non-zero finish after a new start).
+        // Completion: a finished stamp for this accepted start.
         if (finished && finished !== 0 && (finished !== beforeFinished || started !== beforeStarted)) {
           done = true;
           break;
